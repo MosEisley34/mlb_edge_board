@@ -122,14 +122,115 @@ function sendDiscordActionButtonsTest() {
     }]
   };
 
+  var webhookMode = discordWebhookMode_(webhook);
+  var includesComponents = !!(payloadObj && payloadObj.components && payloadObj.components.length);
+
   var res = sendDiscord_(webhook, payloadObj);
+  var bodyPreview = String(res.body || "").slice(0, 300);
   if (res.http >= 200 && res.http < 300) {
-    log_("INFO", "Discord action buttons test sent", { http: res.http, action: "test" });
+    log_("INFO", "Discord action buttons test sent", {
+      action: "test",
+      webhookMode: webhookMode,
+      http: res.http,
+      body: bodyPreview,
+      includesComponents: includesComponents
+    });
     ui.alert("Discord action buttons test sent ✅\n\nClick the button in Discord to validate the web app route.");
   } else {
-    log_("WARN", "Discord action buttons test failed", { http: res.http, body: String(res.body || "").slice(0, 300) });
+    log_("WARN", "Discord action buttons test failed", {
+      action: "test",
+      webhookMode: webhookMode,
+      http: res.http,
+      body: bodyPreview,
+      includesComponents: includesComponents
+    });
     ui.alert("Discord action buttons test failed ❌\n\nHTTP: " + res.http + "\nCheck LOG for details.");
   }
+}
+
+function sendDiscordActionPayloadDiagnostics() {
+  var cfg = getConfig_();
+  var webhook = getDiscordWebhook_(cfg);
+  var ui = SpreadsheetApp.getUi();
+
+  if (!webhook) {
+    log_("ERROR", "Discord diagnostics failed: missing DISCORD_WEBHOOK", {});
+    ui.alert("Discord diagnostics failed.\n\nSet DISCORD_WEBHOOK in SETTINGS and try again.");
+    return;
+  }
+
+  var baseUrl = String(cfg.WEB_APP_URL || "").trim();
+  if (!baseUrl) {
+    log_("ERROR", "Discord diagnostics failed: missing WEB_APP_URL", {});
+    ui.alert("Discord diagnostics failed.\n\nSet WEB_APP_URL in SETTINGS and try again.");
+    return;
+  }
+
+  var webhookMode = discordWebhookMode_(webhook);
+  var token = Utilities.getUuid();
+  var testUrl = baseUrl + "?action=test&token=" + encodeURIComponent(token);
+
+  var diagnosticsPayloads = [
+    {
+      name: "content_only",
+      payload: {
+        content:
+          "🧪 **Discord Diagnostics — Content Only**\n" +
+          "This probe includes only message content so operators can compare webhook behavior."
+      }
+    },
+    {
+      name: "content_with_components",
+      payload: {
+        content:
+          "🧪 **Discord Diagnostics — Content + Components**\n" +
+          "This probe includes a link button to detect component stripping.",
+        components: [{
+          type: 1,
+          components: [
+            { type: 2, style: 5, label: "Open Action Test", url: testUrl }
+          ]
+        }]
+      }
+    }
+  ];
+
+  var allOk = true;
+  for (var i = 0; i < diagnosticsPayloads.length; i++) {
+    var diag = diagnosticsPayloads[i];
+    var includesComponents = !!(diag.payload && diag.payload.components && diag.payload.components.length);
+    var res = sendDiscord_(webhook, diag.payload);
+    var bodyPreview = String(res.body || "").slice(0, 300);
+    var level = (res.http >= 200 && res.http < 300) ? "INFO" : "WARN";
+    if (level !== "INFO") allOk = false;
+
+    log_(level, "Discord diagnostics payload sent", {
+      payloadType: diag.name,
+      webhookMode: webhookMode,
+      http: res.http,
+      body: bodyPreview,
+      includesComponents: includesComponents
+    });
+  }
+
+  if (allOk) {
+    ui.alert("Discord diagnostics sent ✅\n\nReview LOG entries for payloadType content_only vs content_with_components.");
+  } else {
+    ui.alert("Discord diagnostics completed with warnings ⚠️\n\nReview LOG entries for HTTP/body details by payloadType.");
+  }
+}
+
+function discordWebhookMode_(webhook) {
+  var hook = String(webhook || "");
+  if (!hook) return "missing_webhook";
+
+  var parts = hook.split("?");
+  if (parts.length < 2) return "no_query_params";
+
+  var query = parts.slice(1).join("?");
+  var hasWaitTrue = /(?:^|&)wait=true(?:&|$)/i.test(query);
+  if (hasWaitTrue) return "query_params_wait_true";
+  return "query_params_no_wait_true";
 }
 
 function sendDiscordHeartbeat() {
