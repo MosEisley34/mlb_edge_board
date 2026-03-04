@@ -30,6 +30,9 @@ function ensureSettings_(sh) {
     ["ODDS_REF_BOOK", "", "Optional bookmaker key"],
     ["ODDS_LOOKAHEAD_HOURS", "36", "Odds window now→now+hours"],
     ["ODDS_FALLBACK_ON_EMPTY", "TRUE", "If preseason empty, try regular"],
+    ["ODDS_WINDOW_PRE_FIRST_MIN", "60", "Minutes before first local game start to begin odds refresh"],
+    ["ODDS_WINDOW_POST_LAST_MIN", "0", "Minutes after last local game start to continue odds refresh"],
+    ["ODDS_NO_GAMES_BEHAVIOR", "SKIP", "SKIP or FALLBACK_STATIC_WINDOW"],
 
     ["MATCH_TOL_MIN", "360", "Team+time match tolerance (minutes)"],
     ["LINEUP_MIN", "9", "Min hitters per lineup"],
@@ -115,6 +118,9 @@ function getConfig_() {
   cfg.ODDS_REF_BOOK = String(cfg.ODDS_REF_BOOK || "");
   cfg.ODDS_LOOKAHEAD_HOURS = toFloat_(cfg.ODDS_LOOKAHEAD_HOURS, 36);
   cfg.ODDS_FALLBACK_ON_EMPTY = String(cfg.ODDS_FALLBACK_ON_EMPTY || "TRUE").toUpperCase() === "TRUE";
+  cfg.ODDS_WINDOW_PRE_FIRST_MIN = toInt_(cfg.ODDS_WINDOW_PRE_FIRST_MIN, 60);
+  cfg.ODDS_WINDOW_POST_LAST_MIN = toInt_(cfg.ODDS_WINDOW_POST_LAST_MIN, 0);
+  cfg.ODDS_NO_GAMES_BEHAVIOR = String(cfg.ODDS_NO_GAMES_BEHAVIOR || "SKIP").toUpperCase();
   cfg.MATCH_TOL_MIN = toInt_(cfg.MATCH_TOL_MIN, 360);
   cfg.LINEUP_MIN = toInt_(cfg.LINEUP_MIN, 9);
   cfg.PROJ_CACHE_HOURS = toFloat_(cfg.PROJ_CACHE_HOURS, 12);

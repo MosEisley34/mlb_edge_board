@@ -292,7 +292,62 @@ function runPipeline() {
       return;
     }
 
-    var oddsRes = refreshOdds_(cfg);
+    var oddsRes = { sportKeyUsed: chooseSportKey_(cfg), games: 0, updatedAt: isoLocalWithOffset_(new Date()), skipped: true };
+    var oddsWindow = null;
+    var oddsWindowError = "";
+    try {
+      oddsWindow = getMLBOddsRefreshWindow_(cfg);
+    } catch (eWindow) {
+      oddsWindowError = String(eWindow);
+      log_("WARN", "Odds refresh schedule fetch error (fallback static window)", { message: oddsWindowError });
+    }
+
+    var shouldRefreshOdds = false;
+    var nowLocal = new Date();
+
+    if (oddsWindow && oddsWindow.hasGames) {
+      shouldRefreshOdds = nowLocal.getTime() >= oddsWindow.windowStart.getTime() && nowLocal.getTime() <= oddsWindow.windowEnd.getTime();
+      if (!shouldRefreshOdds) {
+        log_("INFO", "Odds refresh skipped: outside computed window", {
+          nowLocal: isoLocalWithOffset_(nowLocal),
+          firstGameLocal: oddsWindow.firstGameLocalIso,
+          lastGameLocal: oddsWindow.lastGameLocalIso,
+          windowStart: oddsWindow.windowStartIso,
+          windowEnd: oddsWindow.windowEndIso,
+          gameCount: oddsWindow.gameCount
+        });
+      }
+    } else if (oddsWindow && !oddsWindow.hasGames) {
+      var noGamesBehavior = String(cfg.ODDS_NO_GAMES_BEHAVIOR || "SKIP").toUpperCase();
+      if (noGamesBehavior === "FALLBACK_STATIC_WINDOW") {
+        shouldRefreshOdds = withinActiveHours_(cfg);
+        if (!shouldRefreshOdds) {
+          log_("INFO", "Odds refresh skipped: no games today + outside static window", {
+            behavior: noGamesBehavior,
+            activeStart: cfg.ACTIVE_START,
+            activeEnd: cfg.ACTIVE_END,
+            scheduleDateLocal: oddsWindow.scheduleDateLocal
+          });
+        }
+      } else {
+        log_("INFO", "Odds refresh skipped: no games today", {
+          behavior: noGamesBehavior,
+          scheduleDateLocal: oddsWindow.scheduleDateLocal
+        });
+      }
+    } else {
+      shouldRefreshOdds = withinActiveHours_(cfg);
+      if (!shouldRefreshOdds) {
+        log_("INFO", "Odds refresh skipped: schedule fetch error + outside static window", {
+          activeStart: cfg.ACTIVE_START,
+          activeEnd: cfg.ACTIVE_END,
+          error: oddsWindowError
+        });
+      }
+    }
+
+    if (shouldRefreshOdds) oddsRes = refreshOdds_(cfg);
+
     var mlbRes = refreshMLBScheduleAndLineups_(cfg);
     refreshProjectionsIfStale_(cfg, false);
     var modelRes = refreshModelAndEdge_(cfg, mlbRes);
