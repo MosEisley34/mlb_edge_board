@@ -88,6 +88,50 @@ function sendDiscordTestPing() {
   }
 }
 
+
+function sendDiscordActionButtonsTest() {
+  var cfg = getConfig_();
+  var webhook = getDiscordWebhook_(cfg);
+  var ui = SpreadsheetApp.getUi();
+
+  if (!webhook) {
+    log_("ERROR", "Discord action test failed: missing DISCORD_WEBHOOK", {});
+    ui.alert("Discord action test failed.\n\nSet DISCORD_WEBHOOK in SETTINGS and try again.");
+    return;
+  }
+
+  var baseUrl = String(cfg.WEB_APP_URL || "").trim();
+  if (!baseUrl) {
+    log_("ERROR", "Discord action test failed: missing WEB_APP_URL", {});
+    ui.alert("Discord action test failed.\n\nSet WEB_APP_URL in SETTINGS and try again.");
+    return;
+  }
+
+  var token = Utilities.getUuid();
+  var testUrl = baseUrl + "?action=test&token=" + encodeURIComponent(token);
+  var payloadObj = {
+    content:
+      "🧪 **Lucky Luciano MLB — Action Buttons Test**\n" +
+      "Use this test message to validate Discord buttons and Web App routing.\n" +
+      "This does **not** create or update betting logs.",
+    components: [{
+      type: 1,
+      components: [
+        { type: 2, style: 5, label: "Open Action Test", url: testUrl }
+      ]
+    }]
+  };
+
+  var res = sendDiscord_(webhook, payloadObj);
+  if (res.http >= 200 && res.http < 300) {
+    log_("INFO", "Discord action buttons test sent", { http: res.http, action: "test" });
+    ui.alert("Discord action buttons test sent ✅\n\nClick the button in Discord to validate the web app route.");
+  } else {
+    log_("WARN", "Discord action buttons test failed", { http: res.http, body: String(res.body || "").slice(0, 300) });
+    ui.alert("Discord action buttons test failed ❌\n\nHTTP: " + res.http + "\nCheck LOG for details.");
+  }
+}
+
 function sendDiscordHeartbeat() {
   var cfg = getConfig_();
   var webhook = getDiscordWebhook_(cfg);
