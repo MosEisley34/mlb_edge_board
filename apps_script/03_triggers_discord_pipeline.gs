@@ -49,11 +49,29 @@ function getDiscordWebhook_(cfg) {
 
 function getDiscordBotConfig_(cfg) {
   var props = PropertiesService.getScriptProperties();
-  var token = (cfg && cfg.DISCORD_BOT_TOKEN ? cfg.DISCORD_BOT_TOKEN : "") ||
+  var tokenRaw = (cfg && cfg.DISCORD_BOT_TOKEN ? cfg.DISCORD_BOT_TOKEN : "") ||
     props.getProperty(PROP.DISCORD_BOT_TOKEN) || "";
   var channelId = (cfg && cfg.DISCORD_CHANNEL_ID ? cfg.DISCORD_CHANNEL_ID : "") ||
     props.getProperty(PROP.DISCORD_CHANNEL_ID) || "";
-  return { token: String(token || "").trim(), channelId: String(channelId || "").trim() };
+  var tokenInfo = normalizeDiscordBotToken_(tokenRaw);
+  return {
+    token: tokenInfo.token,
+    channelId: String(channelId || "").trim(),
+    tokenHadPrefix: tokenInfo.hadPrefix,
+    tokenLength: tokenInfo.token.length
+  };
+}
+
+function normalizeDiscordBotToken_(rawToken) {
+  var s = String(rawToken || "").trim();
+  var hadPrefix = /^bot\s+/i.test(s);
+  if (hadPrefix) s = s.replace(/^bot\s+/i, "").trim();
+  return { token: s, hadPrefix: hadPrefix };
+}
+
+function discordBotAuthHeader_(botToken) {
+  var t = String(botToken || "").trim();
+  return "Bot " + t;
 }
 
 function sendDiscordWebhook_(webhook, payloadObj) {
@@ -68,14 +86,127 @@ function sendDiscordWebhook_(webhook, payloadObj) {
 
 function sendDiscordBotMessage_(botCfg, payloadObj) {
   var endpoint = "https://discord.com/api/v10/channels/" + encodeURIComponent(botCfg.channelId) + "/messages";
-  var resp = UrlFetchApp.fetch(endpoint, {
-    method: "post",
-    contentType: "application/json",
-    payload: JSON.stringify(payloadObj),
-    headers: { Authorization: "Bot " + botCfg.token },
+  var maxAttempts = 3;
+  var attemptCount = 0;
+  var finalResp = null;
+  var finalBody = "";
+  var finalHttp = 0;
+  for (var attempt = 1; attempt <= maxAttempts; attempt++) {
+    attemptCount = attempt;
+    var resp = UrlFetchApp.fetch(endpoint, {
+      method: "post",
+      contentType: "application/json",
+      payload: JSON.stringify(payloadObj),
+      headers: { Authorization: discordBotAuthHeader_(botCfg.token) },
+      muteHttpExceptions: true
+    });
+    var http = resp.getResponseCode();
+    var body = resp.getContentText();
+    finalResp = resp;
+    finalBody = body;
+    finalHttp = http;
+
+    var retryMeta = discordRetryMeta_(http, body);
+    if (attempt >= maxAttempts || !retryMeta.retry) break;
+
+    log_("WARN", "Discord bot send retry scheduled", {
+      deliveryMode: "bot_channel",
+      attempt: attempt,
+      maxAttempts: maxAttempts,
+      http: http,
+      discordCode: retryMeta.discordCode,
+      retryAfterMs: retryMeta.retryAfterMs,
+      body: String(body || "").slice(0, 300)
+    });
+    Utilities.sleep(retryMeta.retryAfterMs);
+  }
+
+  return {
+    http: finalHttp,
+    body: finalBody,
+    deliveryMode: "bot_channel",
+    attempts: (finalResp ? attemptCount : 0)
+  };
+}
+
+function discordRetryMeta_(http, bodyText) {
+  var body = String(bodyText || "");
+  var parsed = null;
+  var discordCode = "";
+  var retryAfterMs = 0;
+
+  try { parsed = JSON.parse(body); } catch (e) { parsed = null; }
+  if (parsed && parsed.code !== undefined && parsed.code !== null) discordCode = String(parsed.code);
+
+  if (http === 429 && parsed && parsed.retry_after !== undefined) {
+    var ra = Number(parsed.retry_after);
+    if (isFinite(ra) && ra >= 0) {
+      retryAfterMs = (ra > 20) ? Math.round(ra) : Math.round(ra * 1000);
+    }
+  }
+
+  var retry = false;
+  if (http >= 500 && http <= 599) retry = true;
+  if (http === 429) retry = true;
+  if (http === 403 && discordCode === "40333") retry = true;
+
+  if (retryAfterMs <= 0) {
+    if (http === 429) retryAfterMs = 1200;
+    else if (http >= 500) retryAfterMs = 1000;
+    else if (http === 403 && discordCode === "40333") retryAfterMs = 900;
+    else retryAfterMs = 800;
+  }
+
+  retryAfterMs = Math.max(200, Math.min(5000, retryAfterMs));
+  return { retry: retry, retryAfterMs: retryAfterMs, discordCode: discordCode };
+}
+
+function discordBotRequest_(botCfg, method, endpoint, payloadObj) {
+  var options = {
+    method: method,
+    headers: { Authorization: discordBotAuthHeader_(botCfg.token) },
     muteHttpExceptions: true
+  };
+  if (payloadObj) {
+    options.contentType = "application/json";
+    options.payload = JSON.stringify(payloadObj);
+  }
+  var resp = UrlFetchApp.fetch(endpoint, options);
+  return { http: resp.getResponseCode(), body: resp.getContentText() };
+}
+
+function runDiscordBotPreflight_(botCfg) {
+  var tokenLen = String(botCfg.token || "").length;
+  var channelId = String(botCfg.channelId || "").trim();
+  var channelLooksValid = /^\d{16,22}$/.test(channelId);
+
+  log_("INFO", "Discord bot preflight config", {
+    deliveryMode: "bot_channel",
+    tokenLength: tokenLen,
+    tokenHadPrefix: !!botCfg.tokenHadPrefix,
+    channelIdLength: channelId.length,
+    channelIdLooksNumeric: channelLooksValid
   });
-  return { http: resp.getResponseCode(), body: resp.getContentText(), deliveryMode: "bot_channel" };
+
+  var meRes = discordBotRequest_(botCfg, "get", "https://discord.com/api/v10/users/@me", null);
+  log_((meRes.http >= 200 && meRes.http < 300) ? "INFO" : "WARN", "Discord bot preflight /users/@me", {
+    deliveryMode: "bot_channel",
+    http: meRes.http,
+    body: String(meRes.body || "").slice(0, 300)
+  });
+
+  var chRes = discordBotRequest_(botCfg, "get", "https://discord.com/api/v10/channels/" + encodeURIComponent(channelId), null);
+  log_((chRes.http >= 200 && chRes.http < 300) ? "INFO" : "WARN", "Discord bot preflight /channels/{id}", {
+    deliveryMode: "bot_channel",
+    http: chRes.http,
+    body: String(chRes.body || "").slice(0, 300)
+  });
+
+  return {
+    ok: (meRes.http >= 200 && meRes.http < 300) && (chRes.http >= 200 && chRes.http < 300),
+    meHttp: meRes.http,
+    channelHttp: chRes.http
+  };
 }
 
 function discordDeliveryMode_(cfg, opts) {
@@ -199,6 +330,12 @@ function sendDiscordActionPayloadDiagnostics() {
     return;
   }
 
+  var preflight = runDiscordBotPreflight_(deliveryMode.botCfg);
+  if (!preflight.ok) {
+    ui.alert("Discord diagnostics failed preflight ❌\n\n/users/@me HTTP: " + preflight.meHttp + "\n/channels/{id} HTTP: " + preflight.channelHttp + "\nCheck LOG for details.");
+    return;
+  }
+
   var baseUrl = String(cfg.WEB_APP_URL || "").trim();
   if (!baseUrl) {
     log_("ERROR", "Discord diagnostics failed: missing WEB_APP_URL", {});
@@ -256,6 +393,25 @@ function sendDiscordActionPayloadDiagnostics() {
     ui.alert("Discord diagnostics sent ✅\n\nReview LOG entries for payloadType content_only vs content_with_components.");
   } else {
     ui.alert("Discord diagnostics completed with warnings ⚠️\n\nReview LOG entries for HTTP/body details by payloadType.");
+  }
+}
+
+function sendDiscordBotPreflightDiagnostics() {
+  var cfg = getConfig_();
+  var deliveryMode = discordDeliveryMode_(cfg, { allowWebhook: false });
+  var ui = SpreadsheetApp.getUi();
+
+  if (deliveryMode.mode !== "bot_channel") {
+    log_("ERROR", "Discord bot preflight failed: missing bot config", { deliveryMode: deliveryMode.mode });
+    ui.alert("Discord bot preflight failed.\n\nSet DISCORD_BOT_TOKEN and DISCORD_CHANNEL_ID in SETTINGS and try again.");
+    return;
+  }
+
+  var preflight = runDiscordBotPreflight_(deliveryMode.botCfg);
+  if (preflight.ok) {
+    ui.alert("Discord bot preflight passed ✅\n\n/users/@me HTTP: " + preflight.meHttp + "\n/channels/{id} HTTP: " + preflight.channelHttp);
+  } else {
+    ui.alert("Discord bot preflight failed ❌\n\n/users/@me HTTP: " + preflight.meHttp + "\n/channels/{id} HTTP: " + preflight.channelHttp + "\nCheck LOG for details.");
   }
 }
 
