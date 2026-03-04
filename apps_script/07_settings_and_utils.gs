@@ -8,7 +8,9 @@ function ensureSettings_(sh) {
     ["ACTIVE_END", "23:30", "Local time window end (HH:MM)"],
 
     ["ODDS_API_KEY", "", "TheOddsAPI key"],
-    ["DISCORD_WEBHOOK", "", "Discord webhook URL"],
+    ["DISCORD_WEBHOOK", "", "Discord webhook URL (plain text notices)"],
+    ["DISCORD_BOT_TOKEN", "", "Discord bot token for app-based action messages"],
+    ["DISCORD_CHANNEL_ID", "", "Discord channel ID for bot posts"],
     ["WEB_APP_URL", "", "Apps Script Web App URL for secure Discord action links"],
     ["ACTION_TOKEN_SECRET", "", "Secret used to sign Discord action tokens"],
     ["ACTION_TOKEN_TTL_MIN", "60", "Token TTL in minutes for action links"],
@@ -101,6 +103,8 @@ function getConfig_() {
   cfg.ACTIVE_END = cfg.ACTIVE_END || "23:30";
   cfg.ODDS_API_KEY = String(cfg.ODDS_API_KEY || "").trim();
   cfg.DISCORD_WEBHOOK = String(cfg.DISCORD_WEBHOOK || "").trim();
+  cfg.DISCORD_BOT_TOKEN = String(cfg.DISCORD_BOT_TOKEN || "").trim();
+  cfg.DISCORD_CHANNEL_ID = String(cfg.DISCORD_CHANNEL_ID || "").trim();
   cfg.WEB_APP_URL = String(cfg.WEB_APP_URL || "").trim();
   cfg.ACTION_TOKEN_SECRET = String(cfg.ACTION_TOKEN_SECRET || "").trim();
   cfg.ACTION_TOKEN_TTL_MIN = toInt_(cfg.ACTION_TOKEN_TTL_MIN, 60);

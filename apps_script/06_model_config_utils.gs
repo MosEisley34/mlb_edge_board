@@ -409,9 +409,6 @@ function computeUnits_(unitsCfg, tier, confidence) {
 }
 
 function maybeNotifyDiscord_(cfg, oddsId, dateKey, payload) {
-  var webhook = String(cfg.DISCORD_WEBHOOK || "").trim();
-  if (!webhook) return false;
-
   var maxAgeMin = toFloat_(cfg.NOTIFY_MAX_ODDS_AGE_MIN, 45);
   var t = Date.parse(String(payload.updatedAt || ""));
   if (t) {
@@ -484,15 +481,43 @@ function maybeNotifyDiscord_(cfg, oddsId, dateKey, payload) {
     ];
   }
 
-  var res = sendDiscord_(webhook, payloadObj);
+  var includesComponents = !!(payloadObj && payloadObj.components && payloadObj.components.length);
+  var deliveryMode = discordDeliveryMode_(cfg, { allowWebhook: !includesComponents });
+  if (deliveryMode.mode === "missing" || deliveryMode.mode === "missing_bot") {
+    appendBetEvent_(betId, "DISCORD_FAILED", "PENDING", "PENDING", {
+      http: 0,
+      body: "missing Discord delivery config",
+      includesComponents: includesComponents,
+      deliveryMode: deliveryMode.mode
+    });
+    log_("WARN", "Discord notify skipped: missing delivery config", { includesComponents: includesComponents, deliveryMode: deliveryMode.mode });
+    return false;
+  }
+
+  var res = sendDiscordByMode_(deliveryMode, payloadObj);
   if (res.http >= 200 && res.http < 300) {
     props.setProperty(key, sig);
-    appendBetEvent_(betId, "DISCORD_SENT", "PENDING", "PENDING", { http: res.http });
+    appendBetEvent_(betId, "DISCORD_SENT", "PENDING", "PENDING", {
+      http: res.http,
+      body: String(res.body || "").slice(0, 200),
+      includesComponents: includesComponents,
+      deliveryMode: res.deliveryMode
+    });
     return true;
   }
 
-  appendBetEvent_(betId, "DISCORD_FAILED", "PENDING", "PENDING", { http: res.http, body: String(res.body || "").slice(0, 200) });
-  log_("WARN", "Discord notify failed", { http: res.http, body: String(res.body || "").slice(0, 250) });
+  appendBetEvent_(betId, "DISCORD_FAILED", "PENDING", "PENDING", {
+    http: res.http,
+    body: String(res.body || "").slice(0, 200),
+    includesComponents: includesComponents,
+    deliveryMode: res.deliveryMode
+  });
+  log_("WARN", "Discord notify failed", {
+    http: res.http,
+    body: String(res.body || "").slice(0, 250),
+    includesComponents: includesComponents,
+    deliveryMode: res.deliveryMode
+  });
   return false;
 }
 
