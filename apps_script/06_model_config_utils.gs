@@ -118,6 +118,9 @@ function refreshModelAndEdge_core_(cfg, mlbRes) {
 
     var awayImp = implied_(o.away_odds_decimal, o.away_implied);
     var homeImp = implied_(o.home_odds_decimal, o.home_implied);
+    var vigSum = (isFinite(awayImp) && isFinite(homeImp) && (awayImp + homeImp) > 0) ? (awayImp + homeImp) : NaN;
+    var awayNoVig = isFinite(vigSum) ? (awayImp / vigSum) : NaN;
+    var homeNoVig = isFinite(vigSum) ? (homeImp / vigSum) : NaN;
     var edgeAway = (isFinite(awayImp) ? (pAway - awayImp) : "");
     var edgeHome = (isFinite(homeImp) ? (pHome - homeImp) : "");
     var conf = confidence_(mode, awayOPS.matched, homeOPS.matched, awaySI.matched, homeSI.matched);
@@ -153,6 +156,12 @@ function refreshModelAndEdge_core_(cfg, mlbRes) {
             homeOdds: o.home_odds_decimal,
             awayImp: awayImp,
             homeImp: homeImp,
+            awayNoVig: awayNoVig,
+            homeNoVig: homeNoVig,
+            coverageAway: awayOPS.matched + "/" + lineupMin,
+            coverageHome: homeOPS.matched + "/" + lineupMin,
+            pitchers: (awaySI.matched ? "Y" : "N") + "/" + (homeSI.matched ? "Y" : "N"),
+            mlbGamePk: mlbPk,
             updatedAt: (o.updated_at_local || o.updated_at_utc || "")
           });
 
@@ -420,22 +429,69 @@ function maybeNotifyDiscord_(cfg, oddsId, dateKey, payload) {
   var pickTeam = (payload.bet.side === "AWAY") ? payload.awayTeam : payload.homeTeam;
   var price = (payload.bet.side === "AWAY") ? payload.awayOdds : payload.homeOdds;
   var implied = (payload.bet.side === "AWAY") ? payload.awayImp : payload.homeImp;
+  var noVig = (payload.bet.side === "AWAY") ? payload.awayNoVig : payload.homeNoVig;
   var modelP = (payload.bet.side === "AWAY") ? payload.pAway : payload.pHome;
 
-  var msg =
-    "📣 **" + payload.mode + " BET SIGNAL — " + payload.bet.tier + "**\n" +
-    "**Pick:** " + pickTeam + " (" + payload.bet.side + ") @ **" + price + "**\n" +
-    "**Model:** " + (modelP * 100).toFixed(1) + "% | **Implied:** " + (implied * 100).toFixed(1) + "% | **Edge:** " + (payload.bet.edge * 100).toFixed(1) + "%\n" +
-    "**Confidence:** " + Math.round(payload.conf) + "/100 | **Units:** " + Number(payload.units).toFixed(2) + "\n" +
-    "**Game:** " + payload.awayTeam + " @ " + payload.homeTeam + " | **Local:** " + payload.commenceLocal + "\n" +
-    "_OddsId: " + oddsId + "_";
+  var betId = createPendingBet_(cfg, {
+    oddsGameId: oddsId,
+    mlbGamePk: payload.mlbGamePk || "",
+    awayTeam: payload.awayTeam,
+    homeTeam: payload.homeTeam,
+    pickSide: payload.bet.side,
+    pickTeam: pickTeam,
+    commenceLocal: payload.commenceLocal,
+    pickPrice: price,
+    modelProb: modelP,
+    implied: implied,
+    noVigImplied: isFinite(noVig) ? noVig : "",
+    edge: payload.bet.edge,
+    confidence: payload.conf,
+    unitsSuggested: payload.units,
+    mode: payload.mode
+  });
 
-  var res = sendDiscord_(webhook, { content: msg });
+  var links = buildActionLinks_(cfg, betId);
+
+  var msg =
+    "📈 **" + payload.mode + " MODEL SIGNAL — " + payload.bet.tier + "**\n" +
+    "**" + payload.awayTeam + " @ " + payload.homeTeam + "**\n" +
+    "🕒 " + payload.commenceLocal + "\n\n" +
+    "🎯 **Bet:** " + payload.bet.side + " (" + pickTeam + ") @ **" + price + "**\n" +
+    "💰 **Units:** " + Number(payload.units).toFixed(2) + "\n\n" +
+    "📊 **Model:** " + (modelP * 100).toFixed(1) + "% | **Implied:** " + (implied * 100).toFixed(1) + "%" +
+    (isFinite(noVig) ? " | **No-vig:** " + (noVig * 100).toFixed(1) + "%" : "") + "\n" +
+    "📈 **Edge:** " + (payload.bet.edge * 100).toFixed(2) + "% | **Confidence:** " + Math.round(payload.conf) + "/100\n" +
+    "📚 Coverage: " + payload.coverageAway + " vs " + payload.coverageHome + " | ⚾ Pitchers: " + payload.pitchers + "\n" +
+    "🆔 BetId: `" + betId + "` | OddsId: `" + oddsId + "`";
+
+  var payloadObj = { content: msg };
+  if (links) {
+    payloadObj.components = [
+      {
+        type: 1,
+        components: [
+          { type: 2, style: 5, label: "📝 Confirm Placed", url: links.confirm },
+          { type: 2, style: 5, label: "🟩 Mark Win", url: links.markWin },
+          { type: 2, style: 5, label: "🟥 Mark Loss", url: links.markLoss }
+        ]
+      },
+      {
+        type: 1,
+        components: [
+          { type: 2, style: 5, label: "📋 View Pending", url: links.pending }
+        ]
+      }
+    ];
+  }
+
+  var res = sendDiscord_(webhook, payloadObj);
   if (res.http >= 200 && res.http < 300) {
     props.setProperty(key, sig);
+    appendBetEvent_(betId, "DISCORD_SENT", "PENDING", "PENDING", { http: res.http });
     return true;
   }
 
+  appendBetEvent_(betId, "DISCORD_FAILED", "PENDING", "PENDING", { http: res.http, body: String(res.body || "").slice(0, 200) });
   log_("WARN", "Discord notify failed", { http: res.http, body: String(res.body || "").slice(0, 250) });
   return false;
 }

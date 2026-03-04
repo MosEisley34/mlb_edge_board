@@ -15,6 +15,8 @@ function setup() {
   getOrCreateSheet_(ss, SH.EDGE_BOARD);
   getOrCreateSheet_(ss, SH.PLAYER_MAP);
   getOrCreateSheet_(ss, SH.NOTIFY_STATE);
+  getOrCreateSheet_(ss, SH.BET_LOG);
+  getOrCreateSheet_(ss, SH.BET_EVENTS);
 
   ensureLogHeader_(ss.getSheetByName(SH.LOG));
   ensureOddsHeader_(ss.getSheetByName(SH.ODDS_RAW));
@@ -25,6 +27,8 @@ function setup() {
   ensureEdgeHeader_(ss.getSheetByName(SH.EDGE_BOARD));
   ensurePlayerMapHeader_(ss.getSheetByName(SH.PLAYER_MAP));
   ensureNotifyStateHeader_(ss.getSheetByName(SH.NOTIFY_STATE));
+  ensureBetLogHeader_(ss.getSheetByName(SH.BET_LOG));
+  ensureBetEventsHeader_(ss.getSheetByName(SH.BET_EVENTS));
 
   log_("INFO", "Sheets created/verified.", {
     script_tz: Session.getScriptTimeZone(),
@@ -36,7 +40,8 @@ function resetWorkbook() {
   var ss = SpreadsheetApp.getActive();
   var names = [
     SH.LOG, SH.ODDS_RAW, SH.MLB_SCHEDULE, SH.MLB_LINEUPS,
-    SH.BATTER_PROJ, SH.PITCHER_PROJ, SH.EDGE_BOARD, SH.PLAYER_MAP, SH.NOTIFY_STATE
+    SH.BATTER_PROJ, SH.PITCHER_PROJ, SH.EDGE_BOARD, SH.PLAYER_MAP, SH.NOTIFY_STATE,
+    SH.BET_LOG, SH.BET_EVENTS
   ];
   for (var i = 0; i < names.length; i++) {
     var sh = ss.getSheetByName(names[i]);
@@ -52,6 +57,8 @@ function resetWorkbook() {
   getOrCreateSheet_(ss, SH.EDGE_BOARD);
   getOrCreateSheet_(ss, SH.PLAYER_MAP);
   getOrCreateSheet_(ss, SH.NOTIFY_STATE);
+  getOrCreateSheet_(ss, SH.BET_LOG);
+  getOrCreateSheet_(ss, SH.BET_EVENTS);
 
   ensureLogHeader_(ss.getSheetByName(SH.LOG));
   ensureOddsHeader_(ss.getSheetByName(SH.ODDS_RAW));
@@ -62,6 +69,8 @@ function resetWorkbook() {
   ensureEdgeHeader_(ss.getSheetByName(SH.EDGE_BOARD));
   ensurePlayerMapHeader_(ss.getSheetByName(SH.PLAYER_MAP));
   ensureNotifyStateHeader_(ss.getSheetByName(SH.NOTIFY_STATE));
+  ensureBetLogHeader_(ss.getSheetByName(SH.BET_LOG));
+  ensureBetEventsHeader_(ss.getSheetByName(SH.BET_EVENTS));
 
   var props = PropertiesService.getScriptProperties();
   var all = props.getProperties();
@@ -121,3 +130,16 @@ function ensureEdgeHeader_(sh) {
 
 function ensurePlayerMapHeader_(sh) { setHeader_(sh, ["name_variant","canonical_name","mlb_id","razz_id","notes","updated_at_local"]); }
 function ensureNotifyStateHeader_(sh) { setHeader_(sh, ["date_key","plays","units","last_updated_local"]); }
+function ensureBetLogHeader_(sh) {
+  setHeader_(sh, [
+    "bet_id","created_at_local","status","odds_game_id","mlb_gamePk",
+    "away_team","home_team","pick_side","pick_team","market",
+    "commence_time_local","odds_decimal_alert","model_prob_pick","market_implied_pick",
+    "no_vig_implied_pick","edge_pick","confidence","units_suggested",
+    "placed_at_local","placed_american_odds","placed_decimal_odds","units_placed",
+    "result","result_at_local","pnl_units","notes"
+  ]);
+}
+function ensureBetEventsHeader_(sh) {
+  setHeader_(sh, ["event_at_local","bet_id","event","from_status","to_status","detail"]);
+}
