@@ -84,6 +84,7 @@ function resetWorkbook() {
   props.deleteProperty(PROP.LAST_PIPELINE_STATUS);
   props.deleteProperty(PROP.LAST_PIPELINE_SUMMARY);
   props.deleteProperty(PROP.LAST_HEARTBEAT_KEY);
+  props.deleteProperty(PROP.ODDS_WINDOW_CACHE);
 
   log_("INFO", "Workbook reset completed (tabs deleted + recreated)", {});
 }
