@@ -175,6 +175,13 @@ function discordBotRequest_(botCfg, method, endpoint, payloadObj) {
   return { http: resp.getResponseCode(), body: resp.getContentText() };
 }
 
+function discordErrorCodeFromBody_(bodyText) {
+  var parsed = null;
+  try { parsed = JSON.parse(String(bodyText || "")); } catch (e) { parsed = null; }
+  if (parsed && parsed.code !== undefined && parsed.code !== null) return String(parsed.code);
+  return "";
+}
+
 function runDiscordBotPreflight_(botCfg) {
   var tokenLen = String(botCfg.token || "").length;
   var channelId = String(botCfg.channelId || "").trim();
@@ -195,18 +202,66 @@ function runDiscordBotPreflight_(botCfg) {
     body: String(meRes.body || "").slice(0, 300)
   });
 
-  var chRes = discordBotRequest_(botCfg, "get", "https://discord.com/api/v10/channels/" + encodeURIComponent(channelId), null);
-  log_((chRes.http >= 200 && chRes.http < 300) ? "INFO" : "WARN", "Discord bot preflight /channels/{id}", {
-    deliveryMode: "bot_channel",
-    http: chRes.http,
-    body: String(chRes.body || "").slice(0, 300)
-  });
+  var authOk = (meRes.http >= 200 && meRes.http < 300);
+  var channelEndpoint = "https://discord.com/api/v10/channels/" + encodeURIComponent(channelId);
+  var probeCount = 3;
+  var channelReachable = false;
+  var channelErrorCode = "";
+  var isLikelyDiscordInternal = false;
+  var finalChannelHttp = 0;
+
+  for (var probe = 1; probe <= probeCount; probe++) {
+    var chRes = discordBotRequest_(botCfg, "get", channelEndpoint, null);
+    var probeCode = discordErrorCodeFromBody_(chRes.body);
+    finalChannelHttp = chRes.http;
+    if (probeCode) channelErrorCode = probeCode;
+    if (chRes.http >= 200 && chRes.http < 300) channelReachable = true;
+    if (chRes.http === 403 && probeCode === "40333") isLikelyDiscordInternal = true;
+
+    log_((chRes.http >= 200 && chRes.http < 300) ? "INFO" : "WARN", "Discord bot preflight /channels/{id} probe", {
+      deliveryMode: "bot_channel",
+      probe: probe,
+      probeCount: probeCount,
+      http: chRes.http,
+      discordCode: probeCode,
+      body: String(chRes.body || "").slice(0, 300)
+    });
+
+    if (probe < probeCount) {
+      var jitterMs = 120 + Math.floor(Math.random() * 220);
+      Utilities.sleep(jitterMs);
+    }
+  }
 
   return {
-    ok: (meRes.http >= 200 && meRes.http < 300) && (chRes.http >= 200 && chRes.http < 300),
+    ok: authOk && channelReachable,
+    authOk: authOk,
+    channelReachable: channelReachable,
+    channelErrorCode: channelErrorCode,
+    isLikelyDiscordInternal: isLikelyDiscordInternal,
     meHttp: meRes.http,
-    channelHttp: chRes.http
+    channelHttp: finalChannelHttp
   };
+}
+
+function discordPreflightAlertMessage_(preflight, heading) {
+  if (preflight.ok) {
+    return heading + " passed ✅\n\n/users/@me HTTP: " + preflight.meHttp + "\n/channels/{id} HTTP: " + preflight.channelHttp;
+  }
+
+  var base = heading + " failed ❌\n\n/users/@me HTTP: " + preflight.meHttp + "\n/channels/{id} HTTP: " + preflight.channelHttp;
+  if (preflight.channelErrorCode) base += "\nDiscord code: " + preflight.channelErrorCode;
+
+  if (!preflight.authOk) {
+    return base + "\n\nToken/auth failure: verify DISCORD_BOT_TOKEN (no extra spaces/prefix issues), then retry.";
+  }
+  if (preflight.isLikelyDiscordInternal) {
+    return base + "\n\nDiscord internal/network failure detected (40333). Retry later and check Discord status if it persists.";
+  }
+  if (!preflight.channelReachable) {
+    return base + "\n\nChannel permission failure: verify DISCORD_CHANNEL_ID and bot channel access/permissions.";
+  }
+  return base + "\n\nCheck LOG for details.";
 }
 
 function discordDeliveryMode_(cfg, opts) {
@@ -332,7 +387,7 @@ function sendDiscordActionPayloadDiagnostics() {
 
   var preflight = runDiscordBotPreflight_(deliveryMode.botCfg);
   if (!preflight.ok) {
-    ui.alert("Discord diagnostics failed preflight ❌\n\n/users/@me HTTP: " + preflight.meHttp + "\n/channels/{id} HTTP: " + preflight.channelHttp + "\nCheck LOG for details.");
+    ui.alert(discordPreflightAlertMessage_(preflight, "Discord diagnostics preflight"));
     return;
   }
 
@@ -408,11 +463,7 @@ function sendDiscordBotPreflightDiagnostics() {
   }
 
   var preflight = runDiscordBotPreflight_(deliveryMode.botCfg);
-  if (preflight.ok) {
-    ui.alert("Discord bot preflight passed ✅\n\n/users/@me HTTP: " + preflight.meHttp + "\n/channels/{id} HTTP: " + preflight.channelHttp);
-  } else {
-    ui.alert("Discord bot preflight failed ❌\n\n/users/@me HTTP: " + preflight.meHttp + "\n/channels/{id} HTTP: " + preflight.channelHttp + "\nCheck LOG for details.");
-  }
+  ui.alert(discordPreflightAlertMessage_(preflight, "Discord bot preflight"));
 }
 
 function sendDiscordHeartbeat() {
