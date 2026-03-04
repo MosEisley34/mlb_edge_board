@@ -132,6 +132,94 @@ function pickBestH2H_(bookmakers, awayTeam, homeTeam) {
   };
 }
 
+
+function getMLBOddsRefreshWindow_(cfg) {
+  var now = new Date();
+  var todayLocal = Utilities.formatDate(now, TZ, "yyyy-MM-dd");
+  var preMin = Math.max(0, toInt_(cfg.ODDS_WINDOW_PRE_FIRST_MIN, 60));
+  var postMin = Math.max(0, toInt_(cfg.ODDS_WINDOW_POST_LAST_MIN, 0));
+
+  var schedUrl =
+    "https://statsapi.mlb.com/api/v1/schedule?sportId=1&startDate=" + encodeURIComponent(todayLocal) +
+    "&endDate=" + encodeURIComponent(todayLocal);
+
+  var resp = UrlFetchApp.fetch(schedUrl, { muteHttpExceptions: true });
+  var http = resp.getResponseCode();
+  if (http !== 200) throw new Error("MLB schedule fetch failed: http=" + http);
+
+  var payload;
+  try {
+    payload = JSON.parse(resp.getContentText());
+  } catch (e) {
+    throw new Error("MLB schedule JSON parse failed: " + String(e));
+  }
+
+  var games = [];
+  var dates = (payload && payload.dates) ? payload.dates : [];
+  for (var i = 0; i < dates.length; i++) {
+    var dg = dates[i] && dates[i].games ? dates[i].games : [];
+    for (var j = 0; j < dg.length; j++) games.push(dg[j]);
+  }
+
+  if (games.length === 0) {
+    return {
+      hasGames: false,
+      gameCount: 0,
+      firstGameLocal: null,
+      lastGameLocal: null,
+      windowStart: null,
+      windowEnd: null,
+      preFirstMin: preMin,
+      postLastMin: postMin,
+      scheduleDateLocal: todayLocal
+    };
+  }
+
+  var minStart = Number.POSITIVE_INFINITY;
+  var maxStart = Number.NEGATIVE_INFINITY;
+  for (var g = 0; g < games.length; g++) {
+    var t = Date.parse(String(games[g] && games[g].gameDate ? games[g].gameDate : ""));
+    if (!isFinite(t)) continue;
+    if (t < minStart) minStart = t;
+    if (t > maxStart) maxStart = t;
+  }
+
+  if (!isFinite(minStart) || !isFinite(maxStart)) {
+    return {
+      hasGames: false,
+      gameCount: games.length,
+      firstGameLocal: null,
+      lastGameLocal: null,
+      windowStart: null,
+      windowEnd: null,
+      preFirstMin: preMin,
+      postLastMin: postMin,
+      scheduleDateLocal: todayLocal
+    };
+  }
+
+  var firstGameLocal = new Date(minStart);
+  var lastGameLocal = new Date(maxStart);
+  var windowStart = new Date(minStart - preMin * 60 * 1000);
+  var windowEnd = new Date(maxStart + postMin * 60 * 1000);
+
+  return {
+    hasGames: true,
+    gameCount: games.length,
+    firstGameLocal: firstGameLocal,
+    lastGameLocal: lastGameLocal,
+    windowStart: windowStart,
+    windowEnd: windowEnd,
+    preFirstMin: preMin,
+    postLastMin: postMin,
+    scheduleDateLocal: todayLocal,
+    firstGameLocalIso: isoLocalWithOffset_(firstGameLocal),
+    lastGameLocalIso: isoLocalWithOffset_(lastGameLocal),
+    windowStartIso: isoLocalWithOffset_(windowStart),
+    windowEndIso: isoLocalWithOffset_(windowEnd)
+  };
+}
+
 /* ===================== MLB SCHEDULE + LINEUPS ===================== */
 
 function refreshMLBScheduleAndLineups_(cfg) {
