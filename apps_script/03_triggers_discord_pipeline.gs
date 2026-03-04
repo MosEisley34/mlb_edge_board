@@ -293,14 +293,9 @@ function runPipeline() {
     }
 
     var oddsRes = { sportKeyUsed: chooseSportKey_(cfg), games: 0, updatedAt: isoLocalWithOffset_(new Date()), skipped: true };
-    var oddsWindow = null;
-    var oddsWindowError = "";
-    try {
-      oddsWindow = getMLBOddsRefreshWindow_(cfg);
-    } catch (eWindow) {
-      oddsWindowError = String(eWindow);
-      log_("WARN", "Odds refresh schedule fetch error (fallback static window)", { message: oddsWindowError });
-    }
+    var oddsWindowCtx = resolveOddsWindowForPipeline_(cfg, props);
+    var oddsWindow = oddsWindowCtx.window;
+    var oddsWindowError = oddsWindowCtx.error;
 
     var shouldRefreshOdds = false;
     var nowLocal = new Date();
@@ -314,7 +309,8 @@ function runPipeline() {
           lastGameLocal: oddsWindow.lastGameLocalIso,
           windowStart: oddsWindow.windowStartIso,
           windowEnd: oddsWindow.windowEndIso,
-          gameCount: oddsWindow.gameCount
+          gameCount: oddsWindow.gameCount,
+          windowSource: oddsWindowCtx.source
         });
       }
     } else if (oddsWindow && !oddsWindow.hasGames) {
@@ -326,13 +322,15 @@ function runPipeline() {
             behavior: noGamesBehavior,
             activeStart: cfg.ACTIVE_START,
             activeEnd: cfg.ACTIVE_END,
-            scheduleDateLocal: oddsWindow.scheduleDateLocal
+            scheduleDateLocal: oddsWindow.scheduleDateLocal,
+            windowSource: oddsWindowCtx.source
           });
         }
       } else {
         log_("INFO", "Odds refresh skipped: no games today", {
           behavior: noGamesBehavior,
-          scheduleDateLocal: oddsWindow.scheduleDateLocal
+          scheduleDateLocal: oddsWindow.scheduleDateLocal,
+          windowSource: oddsWindowCtx.source
         });
       }
     } else {
@@ -341,7 +339,8 @@ function runPipeline() {
         log_("INFO", "Odds refresh skipped: schedule fetch error + outside static window", {
           activeStart: cfg.ACTIVE_START,
           activeEnd: cfg.ACTIVE_END,
-          error: oddsWindowError
+          error: oddsWindowError,
+          windowSource: oddsWindowCtx.source
         });
       }
     }
@@ -367,6 +366,107 @@ function runPipeline() {
     throw e;
   } finally {
     lock.releaseLock();
+  }
+}
+
+
+function resolveOddsWindowForPipeline_(cfg, props) {
+  var cacheTtlMin = Math.max(1, toInt_(cfg.ODDS_WINDOW_CACHE_TTL_MIN, 30));
+  var nowMs = Date.now();
+
+  try {
+    var freshWindow = getMLBOddsRefreshWindow_(cfg);
+    storeOddsWindowCache_(props, freshWindow, nowMs);
+    log_("INFO", "Odds window source selected", {
+      source: "fresh_schedule",
+      hasGames: !!(freshWindow && freshWindow.hasGames),
+      gameCount: freshWindow ? freshWindow.gameCount : 0,
+      cacheTtlMin: cacheTtlMin
+    });
+    return { window: freshWindow, source: "fresh_schedule", error: "" };
+  } catch (eWindow) {
+    var errMsg = String(eWindow);
+    var cachedWindow = readOddsWindowCache_(props, nowMs, cacheTtlMin);
+    if (cachedWindow) {
+      log_("WARN", "Odds window source selected", {
+        source: "cached_schedule",
+        hasGames: !!(cachedWindow && cachedWindow.hasGames),
+        gameCount: cachedWindow ? cachedWindow.gameCount : 0,
+        cacheTtlMin: cacheTtlMin,
+        fetchError: errMsg
+      });
+      return { window: cachedWindow, source: "cached_schedule", error: errMsg };
+    }
+
+    log_("WARN", "Odds window source selected", {
+      source: "fallback_static_window",
+      cacheTtlMin: cacheTtlMin,
+      fetchError: errMsg
+    });
+    return { window: null, source: "fallback_static_window", error: errMsg };
+  }
+}
+
+function storeOddsWindowCache_(props, windowObj, cachedAtMs) {
+  if (!props || !windowObj) return;
+  var cachePayload = {
+    cachedAtMs: cachedAtMs,
+    hasGames: !!windowObj.hasGames,
+    gameCount: toInt_(windowObj.gameCount, 0),
+    preFirstMin: toInt_(windowObj.preFirstMin, 0),
+    postLastMin: toInt_(windowObj.postLastMin, 0),
+    scheduleDateLocal: String(windowObj.scheduleDateLocal || ""),
+    firstGameLocalIso: String(windowObj.firstGameLocalIso || ""),
+    lastGameLocalIso: String(windowObj.lastGameLocalIso || ""),
+    windowStartIso: String(windowObj.windowStartIso || ""),
+    windowEndIso: String(windowObj.windowEndIso || "")
+  };
+  props.setProperty(PROP.ODDS_WINDOW_CACHE, JSON.stringify(cachePayload));
+}
+
+function readOddsWindowCache_(props, nowMs, cacheTtlMin) {
+  if (!props) return null;
+  var raw = props.getProperty(PROP.ODDS_WINDOW_CACHE);
+  if (!raw) return null;
+
+  try {
+    var cached = JSON.parse(raw);
+    var cachedAtMs = toInt_(cached.cachedAtMs, 0);
+    if (cachedAtMs <= 0) return null;
+
+    var maxAgeMs = Math.max(1, cacheTtlMin) * 60 * 1000;
+    if ((nowMs - cachedAtMs) > maxAgeMs) return null;
+
+    var parsed = {
+      hasGames: !!cached.hasGames,
+      gameCount: toInt_(cached.gameCount, 0),
+      preFirstMin: toInt_(cached.preFirstMin, 0),
+      postLastMin: toInt_(cached.postLastMin, 0),
+      scheduleDateLocal: String(cached.scheduleDateLocal || ""),
+      firstGameLocalIso: String(cached.firstGameLocalIso || ""),
+      lastGameLocalIso: String(cached.lastGameLocalIso || ""),
+      windowStartIso: String(cached.windowStartIso || ""),
+      windowEndIso: String(cached.windowEndIso || "")
+    };
+
+    if (parsed.hasGames) {
+      parsed.firstGameLocal = parsed.firstGameLocalIso ? new Date(parsed.firstGameLocalIso) : null;
+      parsed.lastGameLocal = parsed.lastGameLocalIso ? new Date(parsed.lastGameLocalIso) : null;
+      parsed.windowStart = parsed.windowStartIso ? new Date(parsed.windowStartIso) : null;
+      parsed.windowEnd = parsed.windowEndIso ? new Date(parsed.windowEndIso) : null;
+      if (!parsed.windowStart || !parsed.windowEnd || isNaN(parsed.windowStart.getTime()) || isNaN(parsed.windowEnd.getTime())) {
+        return null;
+      }
+    } else {
+      parsed.firstGameLocal = null;
+      parsed.lastGameLocal = null;
+      parsed.windowStart = null;
+      parsed.windowEnd = null;
+    }
+
+    return parsed;
+  } catch (eCache) {
+    return null;
   }
 }
 
