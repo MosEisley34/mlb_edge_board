@@ -10,10 +10,23 @@ function doPost(e) {
 
 function handleBetActionGet_(p) {
   var action = String(p.action || "").toLowerCase();
+  if (action === "test") return renderActionTestPage_(p);
   if (action === "confirm") return renderConfirmPlacedForm_(p);
   if (action === "mark") return handleMarkResultFromLink_(p);
   if (action === "pending") return renderPendingHelp_();
   return renderHtmlPage_("Lucky Luciano MLB — Actions", "<p>Use Discord action links to continue.</p>");
+}
+
+function renderActionTestPage_(p) {
+  var token = String(p.token || "");
+  var localNow = localPretty_(new Date());
+  return renderHtmlPage_(
+    "Lucky Luciano MLB — Action Test",
+    "<p>✅ Discord button + web app routing works.</p>" +
+    "<p><b>Local:</b> " + htmlEscape_(localNow) + "</p>" +
+    "<p><b>Token:</b> <code>" + htmlEscape_(token || "(none)") + "</code></p>" +
+    "<p>This endpoint is test-only and does not write to BET_LOG or BET_EVENTS.</p>"
+  );
 }
 
 function handleBetActionPost_(p) {
