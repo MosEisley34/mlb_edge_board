@@ -47,24 +47,64 @@ function getDiscordWebhook_(cfg) {
     PropertiesService.getScriptProperties().getProperty(PROP.DISCORD_WEBHOOK) || "";
 }
 
-function sendDiscord_(webhook, payloadObj) {
+function getDiscordBotConfig_(cfg) {
+  var props = PropertiesService.getScriptProperties();
+  var token = (cfg && cfg.DISCORD_BOT_TOKEN ? cfg.DISCORD_BOT_TOKEN : "") ||
+    props.getProperty(PROP.DISCORD_BOT_TOKEN) || "";
+  var channelId = (cfg && cfg.DISCORD_CHANNEL_ID ? cfg.DISCORD_CHANNEL_ID : "") ||
+    props.getProperty(PROP.DISCORD_CHANNEL_ID) || "";
+  return { token: String(token || "").trim(), channelId: String(channelId || "").trim() };
+}
+
+function sendDiscordWebhook_(webhook, payloadObj) {
   var resp = UrlFetchApp.fetch(webhook, {
     method: "post",
     contentType: "application/json",
     payload: JSON.stringify(payloadObj),
     muteHttpExceptions: true
   });
-  return { http: resp.getResponseCode(), body: resp.getContentText() };
+  return { http: resp.getResponseCode(), body: resp.getContentText(), deliveryMode: "webhook" };
+}
+
+function sendDiscordBotMessage_(botCfg, payloadObj) {
+  var endpoint = "https://discord.com/api/v10/channels/" + encodeURIComponent(botCfg.channelId) + "/messages";
+  var resp = UrlFetchApp.fetch(endpoint, {
+    method: "post",
+    contentType: "application/json",
+    payload: JSON.stringify(payloadObj),
+    headers: { Authorization: "Bot " + botCfg.token },
+    muteHttpExceptions: true
+  });
+  return { http: resp.getResponseCode(), body: resp.getContentText(), deliveryMode: "bot_channel" };
+}
+
+function discordDeliveryMode_(cfg, opts) {
+  var options = opts || {};
+  var allowWebhook = (options.allowWebhook !== false);
+  var botCfg = getDiscordBotConfig_(cfg);
+  if (botCfg.token && botCfg.channelId) return { mode: "bot_channel", botCfg: botCfg, webhook: "" };
+
+  var webhook = getDiscordWebhook_(cfg);
+  if (allowWebhook && webhook) return { mode: "webhook", botCfg: null, webhook: webhook };
+
+  if (allowWebhook) return { mode: "missing", botCfg: null, webhook: "" };
+  return { mode: "missing_bot", botCfg: null, webhook: webhook || "" };
+}
+
+function sendDiscordByMode_(deliveryMode, payloadObj) {
+  if (deliveryMode.mode === "bot_channel") return sendDiscordBotMessage_(deliveryMode.botCfg, payloadObj);
+  if (deliveryMode.mode === "webhook") return sendDiscordWebhook_(deliveryMode.webhook, payloadObj);
+  return { http: 0, body: "", deliveryMode: deliveryMode.mode };
 }
 
 function sendDiscordTestPing() {
   var cfg = getConfig_();
-  var webhook = getDiscordWebhook_(cfg);
+  var deliveryMode = discordDeliveryMode_(cfg, { allowWebhook: true });
   var ui = SpreadsheetApp.getUi();
 
-  if (!webhook) {
-    log_("ERROR", "Discord test ping failed: missing DISCORD_WEBHOOK", {});
-    ui.alert("Discord test ping failed.\n\nSet DISCORD_WEBHOOK in SETTINGS and try again.");
+  if (deliveryMode.mode === "missing") {
+    log_("ERROR", "Discord test ping failed: missing delivery config", {});
+    ui.alert("Discord test ping failed.\n\nSet DISCORD_WEBHOOK or DISCORD_BOT_TOKEN + DISCORD_CHANNEL_ID in SETTINGS and try again.");
     return;
   }
 
@@ -75,15 +115,16 @@ function sendDiscordTestPing() {
       "**Sheet:** " + ss.getName() + "\n" +
       "**Local:** " + localPretty_(new Date()) + "\n" +
       "**UTC:** " + new Date().toISOString() + "\n" +
-      "_If you see this, the webhook is connected and posting._"
+      "_If you see this, Discord delivery is connected and posting._"
   };
 
-  var res = sendDiscord_(webhook, payload);
+  var res = sendDiscordByMode_(deliveryMode, payload);
+  var bodyPreview = String(res.body || "").slice(0, 300);
   if (res.http >= 200 && res.http < 300) {
-    log_("INFO", "Discord test ping sent", { http: res.http });
+    log_("INFO", "Discord test ping sent", { http: res.http, body: bodyPreview, deliveryMode: res.deliveryMode });
     ui.alert("Discord test ping sent ✅\n\nCheck your Discord channel.");
   } else {
-    log_("WARN", "Discord test ping failed", { http: res.http, body: String(res.body || "").slice(0, 300) });
+    log_("WARN", "Discord test ping failed", { http: res.http, body: bodyPreview, deliveryMode: res.deliveryMode });
     ui.alert("Discord test ping failed ❌\n\nHTTP: " + res.http + "\nCheck LOG for details.");
   }
 }
@@ -91,12 +132,12 @@ function sendDiscordTestPing() {
 
 function sendDiscordActionButtonsTest() {
   var cfg = getConfig_();
-  var webhook = getDiscordWebhook_(cfg);
+  var deliveryMode = discordDeliveryMode_(cfg, { allowWebhook: false });
   var ui = SpreadsheetApp.getUi();
 
-  if (!webhook) {
-    log_("ERROR", "Discord action test failed: missing DISCORD_WEBHOOK", {});
-    ui.alert("Discord action test failed.\n\nSet DISCORD_WEBHOOK in SETTINGS and try again.");
+  if (deliveryMode.mode !== "bot_channel") {
+    log_("ERROR", "Discord action test failed: missing bot config", { deliveryMode: deliveryMode.mode });
+    ui.alert("Discord action test failed.\n\nSet DISCORD_BOT_TOKEN and DISCORD_CHANNEL_ID in SETTINGS and try again.");
     return;
   }
 
@@ -122,15 +163,14 @@ function sendDiscordActionButtonsTest() {
     }]
   };
 
-  var webhookMode = discordWebhookMode_(webhook);
   var includesComponents = !!(payloadObj && payloadObj.components && payloadObj.components.length);
 
-  var res = sendDiscord_(webhook, payloadObj);
+  var res = sendDiscordByMode_(deliveryMode, payloadObj);
   var bodyPreview = String(res.body || "").slice(0, 300);
   if (res.http >= 200 && res.http < 300) {
     log_("INFO", "Discord action buttons test sent", {
       action: "test",
-      webhookMode: webhookMode,
+      deliveryMode: res.deliveryMode,
       http: res.http,
       body: bodyPreview,
       includesComponents: includesComponents
@@ -139,7 +179,7 @@ function sendDiscordActionButtonsTest() {
   } else {
     log_("WARN", "Discord action buttons test failed", {
       action: "test",
-      webhookMode: webhookMode,
+      deliveryMode: res.deliveryMode,
       http: res.http,
       body: bodyPreview,
       includesComponents: includesComponents
@@ -150,12 +190,12 @@ function sendDiscordActionButtonsTest() {
 
 function sendDiscordActionPayloadDiagnostics() {
   var cfg = getConfig_();
-  var webhook = getDiscordWebhook_(cfg);
+  var deliveryMode = discordDeliveryMode_(cfg, { allowWebhook: false });
   var ui = SpreadsheetApp.getUi();
 
-  if (!webhook) {
-    log_("ERROR", "Discord diagnostics failed: missing DISCORD_WEBHOOK", {});
-    ui.alert("Discord diagnostics failed.\n\nSet DISCORD_WEBHOOK in SETTINGS and try again.");
+  if (deliveryMode.mode !== "bot_channel") {
+    log_("ERROR", "Discord diagnostics failed: missing bot config", { deliveryMode: deliveryMode.mode });
+    ui.alert("Discord diagnostics failed.\n\nSet DISCORD_BOT_TOKEN and DISCORD_CHANNEL_ID in SETTINGS and try again.");
     return;
   }
 
@@ -166,7 +206,6 @@ function sendDiscordActionPayloadDiagnostics() {
     return;
   }
 
-  var webhookMode = discordWebhookMode_(webhook);
   var token = Utilities.getUuid();
   var testUrl = baseUrl + "?action=test&token=" + encodeURIComponent(token);
 
@@ -176,7 +215,7 @@ function sendDiscordActionPayloadDiagnostics() {
       payload: {
         content:
           "🧪 **Discord Diagnostics — Content Only**\n" +
-          "This probe includes only message content so operators can compare webhook behavior."
+          "This probe includes only message content so operators can compare bot rendering behavior."
       }
     },
     {
@@ -184,7 +223,7 @@ function sendDiscordActionPayloadDiagnostics() {
       payload: {
         content:
           "🧪 **Discord Diagnostics — Content + Components**\n" +
-          "This probe includes a link button to detect component stripping.",
+          "This probe includes a link button to verify component rendering via bot posts.",
         components: [{
           type: 1,
           components: [
@@ -199,14 +238,14 @@ function sendDiscordActionPayloadDiagnostics() {
   for (var i = 0; i < diagnosticsPayloads.length; i++) {
     var diag = diagnosticsPayloads[i];
     var includesComponents = !!(diag.payload && diag.payload.components && diag.payload.components.length);
-    var res = sendDiscord_(webhook, diag.payload);
+    var res = sendDiscordByMode_(deliveryMode, diag.payload);
     var bodyPreview = String(res.body || "").slice(0, 300);
     var level = (res.http >= 200 && res.http < 300) ? "INFO" : "WARN";
     if (level !== "INFO") allOk = false;
 
     log_(level, "Discord diagnostics payload sent", {
       payloadType: diag.name,
-      webhookMode: webhookMode,
+      deliveryMode: res.deliveryMode,
       http: res.http,
       body: bodyPreview,
       includesComponents: includesComponents
@@ -220,23 +259,10 @@ function sendDiscordActionPayloadDiagnostics() {
   }
 }
 
-function discordWebhookMode_(webhook) {
-  var hook = String(webhook || "");
-  if (!hook) return "missing_webhook";
-
-  var parts = hook.split("?");
-  if (parts.length < 2) return "no_query_params";
-
-  var query = parts.slice(1).join("?");
-  var hasWaitTrue = /(?:^|&)wait=true(?:&|$)/i.test(query);
-  if (hasWaitTrue) return "query_params_wait_true";
-  return "query_params_no_wait_true";
-}
-
 function sendDiscordHeartbeat() {
   var cfg = getConfig_();
-  var webhook = getDiscordWebhook_(cfg);
-  if (!webhook) { log_("ERROR", "Heartbeat skipped: missing DISCORD_WEBHOOK", {}); return; }
+  var deliveryMode = discordDeliveryMode_(cfg, { allowWebhook: true });
+  if (deliveryMode.mode === "missing") { log_("ERROR", "Heartbeat skipped: missing Discord delivery config", {}); return; }
 
   var mode = String(cfg.HEARTBEAT_MODE || "DAILY").toUpperCase();
   if (mode === "OFF") { log_("INFO", "Heartbeat skipped (mode=OFF)", {}); return; }
@@ -261,14 +287,14 @@ function sendDiscordHeartbeat() {
   if (lastAt) msg += "**Last pipeline (UTC):** " + lastAt + "\n";
   if (lastStatus) msg += "**Last status:** " + lastStatus + "\n";
   if (lastSummary) msg += "**Last summary:** " + lastSummary + "\n";
-  msg += "_If you see this, triggers + webhook are working._";
+  msg += "_If you see this, triggers + Discord delivery are working._";
 
-  var res = sendDiscord_(webhook, { content: msg });
+  var res = sendDiscordByMode_(deliveryMode, { content: msg });
   if (res.http >= 200 && res.http < 300) {
     props.setProperty(PROP.LAST_HEARTBEAT_KEY, key);
-    log_("INFO", "Heartbeat sent", { http: res.http, mode: mode, key: key });
+    log_("INFO", "Heartbeat sent", { http: res.http, mode: mode, key: key, deliveryMode: res.deliveryMode, body: String(res.body || "").slice(0, 200) });
   } else {
-    log_("WARN", "Heartbeat failed", { http: res.http, body: String(res.body || "").slice(0, 200) });
+    log_("WARN", "Heartbeat failed", { http: res.http, body: String(res.body || "").slice(0, 200), deliveryMode: res.deliveryMode });
   }
 }
 
