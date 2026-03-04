@@ -1,0 +1,31 @@
+/*******************************************************
+ * Lucky Luciano MLB Model — Repo version
+ * Timezone: America/Hermosillo (GMT-7) for display/logs.
+ *******************************************************/
+
+var TZ = "America/Hermosillo";
+var TZ_OFFSET = "-07:00";
+
+var SH = {
+  SETTINGS: "SETTINGS",
+  LOG: "LOG",
+  ODDS_RAW: "ODDS_RAW",
+  MLB_SCHEDULE: "MLB_SCHEDULE",
+  MLB_LINEUPS: "MLB_LINEUPS",
+  BATTER_PROJ: "BATTER_PROJ",
+  PITCHER_PROJ: "PITCHER_PROJ",
+  EDGE_BOARD: "EDGE_BOARD",
+  PLAYER_MAP: "PLAYER_MAP",
+  NOTIFY_STATE: "NOTIFY_STATE"
+};
+
+var PROP = {
+  ODDS_API_KEY: "ODDS_API_KEY",
+  DISCORD_WEBHOOK: "DISCORD_WEBHOOK",
+  LAST_PROJ_HIT: "LAST_PROJ_HIT",
+  LAST_PROJ_PIT: "LAST_PROJ_PIT",
+  LAST_PIPELINE_AT: "LAST_PIPELINE_AT",
+  LAST_PIPELINE_STATUS: "LAST_PIPELINE_STATUS",
+  LAST_PIPELINE_SUMMARY: "LAST_PIPELINE_SUMMARY",
+  LAST_HEARTBEAT_KEY: "LAST_HEARTBEAT_KEY"
+};
