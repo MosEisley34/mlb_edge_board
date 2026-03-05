@@ -222,7 +222,8 @@ function getMLBOddsRefreshWindow_(cfg) {
 
 /* ===================== MLB SCHEDULE + LINEUPS ===================== */
 
-function refreshMLBScheduleAndLineups_(cfg) {
+function refreshMLBScheduleAndLineups_(cfg, opts) {
+  opts = opts || {};
   var ss = SpreadsheetApp.getActive();
   var shOdds = ss.getSheetByName(SH.ODDS_RAW);
   var shSchedule = ss.getSheetByName(SH.MLB_SCHEDULE);
@@ -255,24 +256,34 @@ function refreshMLBScheduleAndLineups_(cfg) {
     lineupMin: cfg.LINEUP_MIN
   });
 
-  var schedUrl =
-    "https://statsapi.mlb.com/api/v1/schedule?sportId=1&startDate=" + encodeURIComponent(startDate) +
-    "&endDate=" + encodeURIComponent(endDate) + "&hydrate=team,probablePitcher,venue";
-
-  var schedResp = UrlFetchApp.fetch(schedUrl, { muteHttpExceptions: true });
-  if (schedResp.getResponseCode() !== 200) {
-    log_("ERROR", "MLB schedule fetch failed", { http: schedResp.getResponseCode(), body: schedResp.getContentText().slice(0, 500) });
+  var oddsSportKey = resolveOddsSportKey_(oddsRows, opts.sportKeyUsed || "");
+  var schedMain = fetchScheduleGames_(startDate, endDate, "");
+  if (!schedMain.ok) {
+    log_("ERROR", "MLB schedule fetch failed", { http: schedMain.http, body: schedMain.body });
     replaceSheetBody_(shSchedule, []);
     replaceSheetBody_(shLineups, []);
-    return { scheduleGames: 0, matchedCount: 0, lineupRows: 0, matched: [] };
+    return { scheduleGames: 0, matchedCount: 0, lineupRows: 0, matched: [], rejectionSummary: {} };
   }
 
-  var sched = JSON.parse(schedResp.getContentText());
-  var games = [];
-  var dates = sched.dates || [];
-  for (var d = 0; d < dates.length; d++) {
-    var dg = dates[d].games || [];
-    for (var g = 0; g < dg.length; g++) games.push(dg[g]);
+  var games = schedMain.games;
+  var usedGameType = "default";
+  if (oddsSportKey === cfg.ODDS_SPORT_KEY_PRESEASON && oddsRows.length > 0) {
+    var minNeeded = Math.max(1, Math.floor(oddsRows.length * 0.5));
+    if (games.length < minNeeded) {
+      var schedPreseason = fetchScheduleGames_(startDate, endDate, "S");
+      if (schedPreseason.ok && schedPreseason.games.length >= games.length) {
+        games = schedPreseason.games;
+        usedGameType = "S";
+      }
+      log_("INFO", "Preseason schedule check", {
+        oddsSportKeyUsed: oddsSportKey,
+        oddsEvents: oddsRows.length,
+        defaultScheduleGames: schedMain.games.length,
+        preseasonScheduleGames: schedPreseason.ok ? schedPreseason.games.length : 0,
+        selectedGameType: usedGameType,
+        preseasonHttp: schedPreseason.http
+      });
+    }
   }
 
   var schedRows = [];
@@ -294,7 +305,8 @@ function refreshMLBScheduleAndLineups_(cfg) {
   }
   replaceSheetBody_(shSchedule, schedRows);
 
-  var matched = matchOddsToSchedule_(shOdds, shSchedule, toInt_(cfg.MATCH_TOL_MIN, 360));
+  var matchRes = matchOddsToSchedule_(shOdds, shSchedule, toInt_(cfg.MATCH_TOL_MIN, 360));
+  var matched = matchRes.matched;
 
   var lineupRows = [];
   for (var m = 0; m < matched.length; m++) {
@@ -315,8 +327,64 @@ function refreshMLBScheduleAndLineups_(cfg) {
 
   replaceSheetBody_(shLineups, lineupRows);
 
-  log_("INFO", "refreshMLBScheduleAndLineups completed", { scheduleGames: games.length, matchedCount: matched.length, lineupRows: lineupRows.length });
-  return { scheduleGames: games.length, matchedCount: matched.length, lineupRows: lineupRows.length, matched: matched };
+  log_("INFO", "refreshMLBScheduleAndLineups completed", {
+    scheduleGames: games.length,
+    matchedCount: matched.length,
+    lineupRows: lineupRows.length,
+    scheduleGameType: usedGameType,
+    rejectionSummary: matchRes.rejectionSummary
+  });
+  return {
+    scheduleGames: games.length,
+    matchedCount: matched.length,
+    lineupRows: lineupRows.length,
+    matched: matched,
+    rejectionSummary: matchRes.rejectionSummary
+  };
+}
+
+function fetchScheduleGames_(startDate, endDate, gameType) {
+  var url =
+    "https://statsapi.mlb.com/api/v1/schedule?sportId=1&startDate=" + encodeURIComponent(startDate) +
+    "&endDate=" + encodeURIComponent(endDate) + "&hydrate=team,probablePitcher,venue";
+  if (gameType) url += "&gameType=" + encodeURIComponent(gameType);
+
+  var resp = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
+  var http = resp.getResponseCode();
+  if (http !== 200) {
+    return { ok: false, http: http, games: [], body: resp.getContentText().slice(0, 500) };
+  }
+
+  var payload = JSON.parse(resp.getContentText());
+  var games = [];
+  var dates = payload.dates || [];
+  for (var d = 0; d < dates.length; d++) {
+    var dg = dates[d].games || [];
+    for (var g = 0; g < dg.length; g++) games.push(dg[g]);
+  }
+  return { ok: true, http: http, games: games, body: "" };
+}
+
+function resolveOddsSportKey_(oddsRows, fallbackSportKey) {
+  fallbackSportKey = String(fallbackSportKey || "");
+  if (!oddsRows || oddsRows.length === 0) return fallbackSportKey;
+
+  var counts = {};
+  for (var i = 0; i < oddsRows.length; i++) {
+    var k = String(oddsRows[i].sport_key_used || "").trim();
+    if (!k) continue;
+    counts[k] = (counts[k] || 0) + 1;
+  }
+
+  var bestKey = fallbackSportKey;
+  var bestN = 0;
+  for (var key in counts) {
+    if ((counts[key] || 0) > bestN) {
+      bestN = counts[key];
+      bestKey = key;
+    }
+  }
+  return bestKey;
 }
 
 function extractLineupRows_(box, gamePk, oddsGameId, side) {
@@ -372,7 +440,7 @@ function getProbablePitcherNameSafe_(g, side) {
 function matchOddsToSchedule_(shOdds, shSchedule, matchTolMin) {
   var odds = shOdds.getDataRange().getValues();
   var sched = shSchedule.getDataRange().getValues();
-  if (odds.length < 2 || sched.length < 2) return [];
+  if (odds.length < 2 || sched.length < 2) return { matched: [], rejectionSummary: { insufficient_input_rows: 0 } };
 
   var oh = mapToString_(odds[0]);
   var sh = mapToString_(sched[0]);
@@ -396,6 +464,11 @@ function matchOddsToSchedule_(shOdds, shSchedule, matchTolMin) {
   }
 
   var out = [];
+  var rejectionSummary = {
+    invalid_odds_time: 0,
+    no_team_token_match: 0,
+    outside_time_tolerance: 0
+  };
   for (var j = 1; j < odds.length; j++) {
     var or = odds[j];
     var oddsId = String(or[oIdxId] || "");
@@ -403,18 +476,54 @@ function matchOddsToSchedule_(shOdds, shSchedule, matchTolMin) {
 
     var oAway = String(or[oIdxAway] || "");
     var oHome = String(or[oIdxHome] || "");
-    var oTime = Date.parse(String(or[oIdxComm] || "")) || 0;
+    var oTimeRaw = String(or[oIdxComm] || "");
+    var oTime = Date.parse(oTimeRaw);
+
+    var oAwayNorm = normalizeTeam_(oAway);
+    var oHomeNorm = normalizeTeam_(oHome);
+
+    if (!isFinite(oTime) || oTime <= 0) {
+      rejectionSummary.invalid_odds_time++;
+      log_("DEBUG", "matchOddsToSchedule unmatched", {
+        reason: "invalid_odds_time",
+        odds_event_id: oddsId,
+        away_team: oAway,
+        home_team: oHome,
+        commence_time_utc: oTimeRaw,
+        normalized_tokens: { away: oAwayNorm, home: oHomeNorm },
+        candidate_schedule_rows: []
+      });
+      continue;
+    }
 
     var found = null;
     var bestDt = 999999;
+    var teamCandidates = [];
+    var tolCandidates = [];
 
     for (var s = 0; s < schedRows.length; s++) {
       var sr = schedRows[s];
-      if (normalizeTeam_(oAway) !== normalizeTeam_(sr.away_team)) continue;
-      if (normalizeTeam_(oHome) !== normalizeTeam_(sr.home_team)) continue;
+      var sAwayNorm = normalizeTeam_(sr.away_team);
+      var sHomeNorm = normalizeTeam_(sr.home_team);
+      if (oAwayNorm !== sAwayNorm) continue;
+      if (oHomeNorm !== sHomeNorm) continue;
+
+      teamCandidates.push({
+        mlb_gamePk: sr.mlb_gamePk,
+        gameDate_utc: sr.gameDate,
+        away_team: sr.away_team,
+        home_team: sr.home_team
+      });
 
       var sTime = Date.parse(String(sr.gameDate || "")) || 0;
       var dtMin = Math.abs(oTime - sTime) / 60000;
+      if (dtMin <= matchTolMin) {
+        tolCandidates.push({
+          mlb_gamePk: sr.mlb_gamePk,
+          gameDate_utc: sr.gameDate,
+          dt_min: dtMin
+        });
+      }
       if (dtMin <= matchTolMin && dtMin < bestDt) { bestDt = dtMin; found = sr; }
     }
 
@@ -424,8 +533,22 @@ function matchOddsToSchedule_(shOdds, shSchedule, matchTolMin) {
         mlb_gamePk: found.mlb_gamePk,
         commence_time_local: Utilities.formatDate(new Date(oTime), TZ, "yyyy-MM-dd HH:mm")
       });
+    } else {
+      var reason = teamCandidates.length === 0 ? "no_team_token_match" : "outside_time_tolerance";
+      rejectionSummary[reason] = (rejectionSummary[reason] || 0) + 1;
+      log_("DEBUG", "matchOddsToSchedule unmatched", {
+        reason: reason,
+        odds_event_id: oddsId,
+        away_team: oAway,
+        home_team: oHome,
+        commence_time_utc: oTimeRaw,
+        normalized_tokens: { away: oAwayNorm, home: oHomeNorm },
+        candidate_schedule_rows: teamCandidates,
+        candidates_in_tolerance_window: tolCandidates,
+        match_tolerance_min: matchTolMin
+      });
     }
   }
 
-  return out;
+  return { matched: out, rejectionSummary: rejectionSummary };
 }

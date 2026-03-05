@@ -33,9 +33,10 @@ function refreshModelAndEdge_core_(cfg, mlbRes) {
   var sieraMapObj = buildSIERAMap_(shPit);
   var opsLeagueAvg = opsMapObj.leagueAvgOps || defaultOPS;
 
+  var fallbackMatchRes = null;
   var matched = (mlbRes && mlbRes.matched && mlbRes.matched.length)
     ? mlbRes.matched
-    : matchOddsToSchedule_(shOdds, shSched, toInt_(cfg.MATCH_TOL_MIN, 360));
+    : ((fallbackMatchRes = matchOddsToSchedule_(shOdds, shSched, toInt_(cfg.MATCH_TOL_MIN, 360))).matched || []);
 
   var todayKey = localDateKey_();
   var exposure = getExposureState_(shNotify, todayKey);
