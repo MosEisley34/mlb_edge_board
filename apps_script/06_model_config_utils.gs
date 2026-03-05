@@ -410,24 +410,66 @@ function computeUnits_(unitsCfg, tier, confidence) {
 
 function maybeNotifyDiscord_(cfg, oddsId, dateKey, payload) {
   var maxAgeMin = toFloat_(cfg.NOTIFY_MAX_ODDS_AGE_MIN, 45);
+  var cooldownMin = toFloat_(cfg.NOTIFY_COOLDOWN_MIN, 60);
+  var minOddsMove = toFloat_(cfg.NOTIFY_MIN_ODDS_MOVE, 0.03);
+  var minEdgeMovePct = toFloat_(cfg.NOTIFY_MIN_EDGE_MOVE_PCT, 0.75);
   var t = Date.parse(String(payload.updatedAt || ""));
   if (t) {
     var ageMin = (new Date().getTime() - t) / 60000;
-    if (ageMin > maxAgeMin) return false;
+    if (ageMin > maxAgeMin) {
+      log_("INFO", "Discord notify skipped: stale odds", { oddsId: oddsId, ageMin: round_(ageMin, 2), maxAgeMin: maxAgeMin });
+      return false;
+    }
   }
 
   var props = PropertiesService.getScriptProperties();
   var key = "NOTIFY_" + String(oddsId);
-  var prev = props.getProperty(key) || "";
+  var prevRaw = props.getProperty(key) || "";
+  var prevState = parseNotifyState_(prevRaw);
 
   var sig = [dateKey, payload.bet.side, payload.bet.tier, round_(payload.bet.edge, 4), round_(payload.pAway, 4), round_(payload.pHome, 4)].join("|");
-  if (prev === sig) return false;
+  if (prevState.sig === sig) {
+    log_("INFO", "Discord notify skipped: duplicate signal", { oddsId: oddsId, sig: sig });
+    return false;
+  }
 
   var pickTeam = (payload.bet.side === "AWAY") ? payload.awayTeam : payload.homeTeam;
-  var price = (payload.bet.side === "AWAY") ? payload.awayOdds : payload.homeOdds;
+  var price = Number((payload.bet.side === "AWAY") ? payload.awayOdds : payload.homeOdds);
   var implied = (payload.bet.side === "AWAY") ? payload.awayImp : payload.homeImp;
   var noVig = (payload.bet.side === "AWAY") ? payload.awayNoVig : payload.homeNoVig;
   var modelP = (payload.bet.side === "AWAY") ? payload.pAway : payload.pHome;
+  var edge = Number(payload.bet.edge);
+  var nowMs = new Date().getTime();
+
+  if (isFinite(prevState.lastSentMs) && cooldownMin > 0) {
+    var minsSinceLast = (nowMs - prevState.lastSentMs) / 60000;
+    if (minsSinceLast < cooldownMin) {
+      log_("INFO", "Discord notify skipped: cooldown", {
+        oddsId: oddsId,
+        minsSinceLast: round_(minsSinceLast, 2),
+        cooldownMin: cooldownMin,
+        lastTier: prevState.lastTier || "",
+        tier: payload.bet.tier
+      });
+      return false;
+    }
+  }
+
+  var hasPriorMetrics = isFinite(prevState.lastPrice) && isFinite(prevState.lastEdge);
+  var oddsMove = hasPriorMetrics ? Math.abs(price - prevState.lastPrice) : NaN;
+  var edgeMovePct = hasPriorMetrics ? Math.abs(edge - prevState.lastEdge) * 100 : NaN;
+  var tierChanged = String(prevState.lastTier || "") !== String(payload.bet.tier || "");
+  if (hasPriorMetrics && !tierChanged && oddsMove < minOddsMove && edgeMovePct < minEdgeMovePct) {
+    log_("INFO", "Discord notify skipped: insufficient movement", {
+      oddsId: oddsId,
+      oddsMove: round_(oddsMove, 4),
+      minOddsMove: minOddsMove,
+      edgeMovePct: round_(edgeMovePct, 3),
+      minEdgeMovePct: minEdgeMovePct,
+      tier: payload.bet.tier
+    });
+    return false;
+  }
 
   var betId = createPendingBet_(cfg, {
     oddsGameId: oddsId,
@@ -475,7 +517,15 @@ function maybeNotifyDiscord_(cfg, oddsId, dateKey, payload) {
 
   var res = sendDiscordByMode_(deliveryMode, payloadObj);
   if (res.http >= 200 && res.http < 300) {
-    props.setProperty(key, sig);
+    props.setProperty(key, JSON.stringify({
+      sig: sig,
+      dateKey: dateKey,
+      lastSentAt: isoLocalWithOffset_(new Date()),
+      lastSentMs: nowMs,
+      lastPrice: isFinite(price) ? round_(price, 4) : "",
+      lastEdge: isFinite(edge) ? round_(edge, 6) : "",
+      lastTier: String(payload.bet.tier || "")
+    }));
     appendBetEvent_(betId, "DISCORD_SENT", "PENDING", "PENDING", {
       http: res.http,
       body: String(res.body || "").slice(0, 200),
@@ -498,6 +548,41 @@ function maybeNotifyDiscord_(cfg, oddsId, dateKey, payload) {
     deliveryMode: res.deliveryMode
   });
   return false;
+}
+
+function parseNotifyState_(raw) {
+  var out = {
+    sig: "",
+    dateKey: "",
+    lastSentMs: NaN,
+    lastPrice: NaN,
+    lastEdge: NaN,
+    lastTier: ""
+  };
+  var s = String(raw || "").trim();
+  if (!s) return out;
+
+  if (s.charAt(0) !== "{") {
+    out.sig = s;
+    return out;
+  }
+
+  try {
+    var obj = JSON.parse(s);
+    out.sig = String(obj.sig || "");
+    out.dateKey = String(obj.dateKey || "");
+    out.lastSentMs = toFloat_(obj.lastSentMs, NaN);
+    if (!isFinite(out.lastSentMs)) {
+      var parsed = Date.parse(String(obj.lastSentAt || ""));
+      out.lastSentMs = isFinite(parsed) ? parsed : NaN;
+    }
+    out.lastPrice = toFloat_(obj.lastPrice, NaN);
+    out.lastEdge = toFloat_(obj.lastEdge, NaN);
+    out.lastTier = String(obj.lastTier || "");
+  } catch (e) {
+    out.sig = s;
+  }
+  return out;
 }
 
 function getExposureState_(shNotify, dateKey) {

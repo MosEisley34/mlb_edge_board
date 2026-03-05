@@ -47,6 +47,9 @@ function ensureSettings_(sh) {
     ["MODEL_K_PIT", "3.0", "Logit weight for pitcher factor diff"],
     ["REQUIRE_PITCHER_MATCH", "false", "true/false"],
     ["NOTIFY_MAX_ODDS_AGE_MIN", "45", "Only notify if odds updated within X minutes"],
+    ["NOTIFY_COOLDOWN_MIN", "60", "Minimum minutes between Discord sends for the same odds_game_id"],
+    ["NOTIFY_MIN_ODDS_MOVE", "0.03", "Minimum decimal odds change required to re-notify"],
+    ["NOTIFY_MIN_EDGE_MOVE_PCT", "0.75", "Minimum edge change (percentage points) required to re-notify"],
 
     ["RS_EDGE_MICRO", "0.020", ""], ["RS_EDGE_SMALL", "0.040", ""], ["RS_EDGE_MED", "0.055", ""], ["RS_EDGE_STRONG", "0.065", ""], ["RS_CONF_MIN", "62", ""],
     ["PS_EDGE_MICRO", "0.018", ""], ["PS_EDGE_SMALL", "0.028", ""], ["PS_EDGE_MED", "0.040", ""], ["PS_EDGE_STRONG", "0.050", ""], ["PS_CONF_MIN", "55", ""],
@@ -134,6 +137,9 @@ function getConfig_() {
   cfg.MODEL_K_PIT = toFloat_(cfg.MODEL_K_PIT, 3.0);
   cfg.REQUIRE_PITCHER_MATCH = String(cfg.REQUIRE_PITCHER_MATCH || "false").toLowerCase() === "true";
   cfg.NOTIFY_MAX_ODDS_AGE_MIN = toFloat_(cfg.NOTIFY_MAX_ODDS_AGE_MIN, 45);
+  cfg.NOTIFY_COOLDOWN_MIN = toFloat_(cfg.NOTIFY_COOLDOWN_MIN, 60);
+  cfg.NOTIFY_MIN_ODDS_MOVE = toFloat_(cfg.NOTIFY_MIN_ODDS_MOVE, 0.03);
+  cfg.NOTIFY_MIN_EDGE_MOVE_PCT = toFloat_(cfg.NOTIFY_MIN_EDGE_MOVE_PCT, 0.75);
 
   return cfg;
 }
