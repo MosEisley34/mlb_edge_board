@@ -368,4 +368,55 @@ function parseNumberList_(v, fallbackArr) {
 function clampInt_(n, lo, hi) { n = parseInt(n, 10); if (!isFinite(n)) return lo; return Math.max(lo, Math.min(hi, n)); }
 function pad2_(n) { n = Number(n); return (n < 10 ? "0" : "") + String(n); }
 function round_(x, d) { var n = Number(x); if (!isFinite(n)) return ""; var p = Math.pow(10, d); return Math.round(n * p) / p; }
-function normalizeTeam_(name) { return String(name || "").toLowerCase().replace(/\s+/g, " ").trim(); }
+
+var MLB_TEAM_CANONICAL_ALIASES_ = (function () {
+  var map = {};
+  function add_(canonical, variants) {
+    var canon = String(canonical || "").toLowerCase().replace(/\s+/g, " ").trim();
+    if (!canon) return;
+    map[canon] = canon;
+    for (var i = 0; i < variants.length; i++) {
+      var v = String(variants[i] || "").toLowerCase().replace(/\s+/g, " ").trim();
+      if (v) map[v] = canon;
+    }
+  }
+
+  add_("arizona diamondbacks", ["arizona", "diamondbacks", "d backs", "dbacks", "ari", "az diamondbacks"]);
+  add_("atlanta braves", ["atlanta", "braves", "atl", "a braves"]);
+  add_("baltimore orioles", ["baltimore", "orioles", "bal", "o s", "os"]);
+  add_("boston red sox", ["boston", "red sox", "bos", "boston redsox"]);
+  add_("chicago cubs", ["chicago cubs", "chi cubs", "cubs", "chc"]);
+  add_("chicago white sox", ["chicago white sox", "chi white sox", "white sox", "chi sox", "cws", "sox"]);
+  add_("cincinnati reds", ["cincinnati", "reds", "cin"]);
+  add_("cleveland guardians", ["cleveland", "guardians", "cle", "cleveland indians", "indians"]);
+  add_("colorado rockies", ["colorado", "rockies", "col"]);
+  add_("detroit tigers", ["detroit", "tigers", "det"]);
+  add_("houston astros", ["houston", "astros", "hou"]);
+  add_("kansas city royals", ["kansas city royals", "kansas city", "kc royals", "k c royals", "royals", "kc", "kcr"]);
+  add_("los angeles angels", ["los angeles angels", "la angels", "angels", "anaheim angels", "laa"]);
+  add_("los angeles dodgers", ["los angeles dodgers", "la dodgers", "dodgers", "lad"]);
+  add_("miami marlins", ["miami", "marlins", "mia", "florida marlins"]);
+  add_("milwaukee brewers", ["milwaukee", "brewers", "mil"]);
+  add_("minnesota twins", ["minnesota", "twins", "min"]);
+  add_("new york mets", ["new york mets", "ny mets", "mets", "nym"]);
+  add_("new york yankees", ["new york yankees", "ny yankees", "yankees", "nyy"]);
+  add_("oakland athletics", ["oakland athletics", "oakland", "athletics", "a s", "as", "oak", "sacramento athletics"]);
+  add_("philadelphia phillies", ["philadelphia", "phillies", "phi"]);
+  add_("pittsburgh pirates", ["pittsburgh", "pirates", "pit"]);
+  add_("san diego padres", ["san diego", "padres", "sd", "sdp"]);
+  add_("san francisco giants", ["san francisco", "giants", "sf", "sfg"]);
+  add_("seattle mariners", ["seattle", "mariners", "sea"]);
+  add_("st louis cardinals", ["st louis cardinals", "st. louis cardinals", "st louis", "st. louis", "cardinals", "stl"]);
+  add_("tampa bay rays", ["tampa bay", "rays", "tb", "tbr"]);
+  add_("texas rangers", ["texas", "rangers", "tex", "tx rangers", "tex rangers"]);
+  add_("toronto blue jays", ["toronto", "blue jays", "jays", "tor"]);
+  add_("washington nationals", ["washington", "nationals", "nats", "wsh"]);
+
+  return map;
+})();
+
+function normalizeTeam_(name) {
+  var normalized = String(name || "").toLowerCase().replace(/\s+/g, " ").trim();
+  if (!normalized) return "";
+  return MLB_TEAM_CANONICAL_ALIASES_[normalized] || normalized;
+}
