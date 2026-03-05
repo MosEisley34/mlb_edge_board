@@ -649,6 +649,7 @@ function runPipeline() {
 function resolveOddsWindowForPipeline_(cfg, props) {
   var cacheTtlMin = Math.max(1, toInt_(cfg.ODDS_WINDOW_CACHE_TTL_MIN, 30));
   var nowMs = Date.now();
+  var windowCacheKeyName = String(PROP.ODDS_WINDOW_CACHE || "").trim();
 
   try {
     var freshWindow = getMLBOddsRefreshWindow_(cfg);
@@ -661,15 +662,22 @@ function resolveOddsWindowForPipeline_(cfg, props) {
     });
     return { window: freshWindow, source: "fresh_schedule", error: "" };
   } catch (eWindow) {
-    var errMsg = String(eWindow);
-    var cachedWindow = readOddsWindowCache_(props, nowMs, cacheTtlMin);
+    var errClass = (eWindow && eWindow.name) ? String(eWindow.name) : "Error";
+    var errMsg = (eWindow && eWindow.message) ? String(eWindow.message) : String(eWindow);
+    var cacheResult = readOddsWindowCache_(props, cfg, nowMs, cacheTtlMin, windowCacheKeyName);
+    var cachedWindow = cacheResult.window;
     if (cachedWindow) {
       log_("WARN", "Odds window source selected", {
         source: "cached_schedule",
         hasGames: !!(cachedWindow && cachedWindow.hasGames),
         gameCount: cachedWindow ? cachedWindow.gameCount : 0,
         cacheTtlMin: cacheTtlMin,
-        fetchError: errMsg
+        configuredKeyName: windowCacheKeyName,
+        sourceAttempted: cacheResult.sourceAttempted,
+        fetchErrorClass: errClass,
+        fetchErrorMessage: errMsg,
+        cacheErrorClass: cacheResult.errorClass,
+        cacheErrorMessage: cacheResult.errorMessage
       });
       return { window: cachedWindow, source: "cached_schedule", error: errMsg };
     }
@@ -677,7 +685,13 @@ function resolveOddsWindowForPipeline_(cfg, props) {
     log_("WARN", "Odds window source selected", {
       source: "fallback_static_window",
       cacheTtlMin: cacheTtlMin,
-      fetchError: errMsg
+      configuredKeyName: windowCacheKeyName,
+      sourceAttempted: cacheResult.sourceAttempted,
+      cacheStatus: cacheResult.status,
+      fetchErrorClass: errClass,
+      fetchErrorMessage: errMsg,
+      cacheErrorClass: cacheResult.errorClass,
+      cacheErrorMessage: cacheResult.errorMessage
     });
     return { window: null, source: "fallback_static_window", error: errMsg };
   }
@@ -700,18 +714,99 @@ function storeOddsWindowCache_(props, windowObj, cachedAtMs) {
   props.setProperty(PROP.ODDS_WINDOW_CACHE, JSON.stringify(cachePayload));
 }
 
-function readOddsWindowCache_(props, nowMs, cacheTtlMin) {
-  if (!props) return null;
-  var raw = props.getProperty(PROP.ODDS_WINDOW_CACHE);
-  if (!raw) return null;
+function readOddsWindowCache_(props, cfg, nowMs, cacheTtlMin, keyName) {
+  var resolvedKeyName = String(keyName || "").trim();
+  if (!resolvedKeyName) {
+    return {
+      window: null,
+      status: "missing_key_name",
+      sourceAttempted: "none",
+      errorClass: "ConfigError",
+      errorMessage: "ODDS window cache key name is blank"
+    };
+  }
+
+  var sourceAttempted = [];
+  var raw = "";
+
+  try {
+    sourceAttempted.push("properties");
+    if (props && typeof props.getProperty === "function") raw = String(props.getProperty(resolvedKeyName) || "");
+  } catch (eProps) {
+    return {
+      window: null,
+      status: "runtime_exception",
+      sourceAttempted: sourceAttempted.join("|"),
+      errorClass: (eProps && eProps.name) ? String(eProps.name) : "Error",
+      errorMessage: (eProps && eProps.message) ? String(eProps.message) : String(eProps)
+    };
+  }
+
+  if (!raw) {
+    try {
+      sourceAttempted.push("cache");
+      var scriptCache = CacheService.getScriptCache();
+      raw = scriptCache ? String(scriptCache.get(resolvedKeyName) || "") : "";
+    } catch (eCacheRead) {
+      return {
+        window: null,
+        status: "runtime_exception",
+        sourceAttempted: sourceAttempted.join("|"),
+        errorClass: (eCacheRead && eCacheRead.name) ? String(eCacheRead.name) : "Error",
+        errorMessage: (eCacheRead && eCacheRead.message) ? String(eCacheRead.message) : String(eCacheRead)
+      };
+    }
+  }
+
+  if (!raw) {
+    try {
+      sourceAttempted.push("sheet");
+      var sheetKeyValue = cfg ? cfg[resolvedKeyName] : "";
+      raw = String(sheetKeyValue || "");
+    } catch (eSheetRead) {
+      return {
+        window: null,
+        status: "runtime_exception",
+        sourceAttempted: sourceAttempted.join("|"),
+        errorClass: (eSheetRead && eSheetRead.name) ? String(eSheetRead.name) : "Error",
+        errorMessage: (eSheetRead && eSheetRead.message) ? String(eSheetRead.message) : String(eSheetRead)
+      };
+    }
+  }
+
+  if (!raw) {
+    return {
+      window: null,
+      status: "missing_key",
+      sourceAttempted: sourceAttempted.join("|"),
+      errorClass: "",
+      errorMessage: ""
+    };
+  }
 
   try {
     var cached = JSON.parse(raw);
     var cachedAtMs = toInt_(cached.cachedAtMs, 0);
-    if (cachedAtMs <= 0) return null;
+    if (cachedAtMs <= 0) {
+      return {
+        window: null,
+        status: "missing_key",
+        sourceAttempted: sourceAttempted.join("|"),
+        errorClass: "",
+        errorMessage: ""
+      };
+    }
 
     var maxAgeMs = Math.max(1, cacheTtlMin) * 60 * 1000;
-    if ((nowMs - cachedAtMs) > maxAgeMs) return null;
+    if ((nowMs - cachedAtMs) > maxAgeMs) {
+      return {
+        window: null,
+        status: "missing_key",
+        sourceAttempted: sourceAttempted.join("|"),
+        errorClass: "",
+        errorMessage: ""
+      };
+    }
 
     var parsed = {
       hasGames: !!cached.hasGames,
@@ -731,7 +826,13 @@ function readOddsWindowCache_(props, nowMs, cacheTtlMin) {
       parsed.windowStart = parsed.windowStartIso ? new Date(parsed.windowStartIso) : null;
       parsed.windowEnd = parsed.windowEndIso ? new Date(parsed.windowEndIso) : null;
       if (!parsed.windowStart || !parsed.windowEnd || isNaN(parsed.windowStart.getTime()) || isNaN(parsed.windowEnd.getTime())) {
-        return null;
+        return {
+          window: null,
+          status: "runtime_exception",
+          sourceAttempted: sourceAttempted.join("|"),
+          errorClass: "ParseError",
+          errorMessage: "Cached odds window has invalid windowStart/windowEnd"
+        };
       }
     } else {
       parsed.firstGameLocal = null;
@@ -740,9 +841,21 @@ function readOddsWindowCache_(props, nowMs, cacheTtlMin) {
       parsed.windowEnd = null;
     }
 
-    return parsed;
+    return {
+      window: parsed,
+      status: "ok",
+      sourceAttempted: sourceAttempted.join("|"),
+      errorClass: "",
+      errorMessage: ""
+    };
   } catch (eCache) {
-    return null;
+    return {
+      window: null,
+      status: "runtime_exception",
+      sourceAttempted: sourceAttempted.join("|"),
+      errorClass: (eCache && eCache.name) ? String(eCache.name) : "Error",
+      errorMessage: (eCache && eCache.message) ? String(eCache.message) : String(eCache)
+    };
   }
 }
 
