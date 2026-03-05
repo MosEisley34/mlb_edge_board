@@ -623,17 +623,18 @@ function runPipeline() {
 
     if (shouldRefreshOdds) oddsRes = refreshOdds_(cfg);
 
-    var mlbRes = refreshMLBScheduleAndLineups_(cfg);
+    var mlbRes = refreshMLBScheduleAndLineups_(cfg, { sportKeyUsed: oddsRes.sportKeyUsed });
     refreshProjectionsIfStale_(cfg, false);
     var modelRes = refreshModelAndEdge_(cfg, mlbRes);
 
-    var summary = "odds=" + oddsRes.games + " matched=" + mlbRes.matchedCount + " computed=" + modelRes.computed + " bets=" + modelRes.betSignalsFound;
+    var rejectionSummaryText = JSON.stringify(mlbRes.rejectionSummary || {});
+    var summary = "odds=" + oddsRes.games + " matched=" + mlbRes.matchedCount + " computed=" + modelRes.computed + " bets=" + modelRes.betSignalsFound + " rejects=" + rejectionSummaryText;
 
     props.setProperty(PROP.LAST_PIPELINE_AT, startedUtc);
     props.setProperty(PROP.LAST_PIPELINE_STATUS, "OK");
     props.setProperty(PROP.LAST_PIPELINE_SUMMARY, summary);
 
-    log_("INFO", "runPipeline completed", { odds: oddsRes.games, matched: mlbRes.matchedCount, computed: modelRes.computed, betSignalsFound: modelRes.betSignalsFound });
+    log_("INFO", "runPipeline completed", { odds: oddsRes.games, matched: mlbRes.matchedCount, computed: modelRes.computed, betSignalsFound: modelRes.betSignalsFound, rejectionSummary: mlbRes.rejectionSummary || {} });
   } catch (e) {
     props.setProperty(PROP.LAST_PIPELINE_AT, startedUtc);
     props.setProperty(PROP.LAST_PIPELINE_STATUS, "ERROR");
