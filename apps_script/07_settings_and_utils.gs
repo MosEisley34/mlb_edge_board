@@ -43,6 +43,15 @@ function ensureSettings_(sh) {
     ["MATCH_TOL_MIN", "360", "Team+time match tolerance (minutes)"],
     ["LINEUP_MIN", "9", "Min hitters per lineup"],
     ["LINEUP_FALLBACK_MODE", "STRICT", "STRICT or FALLBACK"],
+    ["LINEUP_PA_W_1", "1.12", "Expected PA weight for lineup slot 1"],
+    ["LINEUP_PA_W_2", "1.08", "Expected PA weight for lineup slot 2"],
+    ["LINEUP_PA_W_3", "1.05", "Expected PA weight for lineup slot 3"],
+    ["LINEUP_PA_W_4", "1.03", "Expected PA weight for lineup slot 4"],
+    ["LINEUP_PA_W_5", "1.00", "Expected PA weight for lineup slot 5"],
+    ["LINEUP_PA_W_6", "0.97", "Expected PA weight for lineup slot 6"],
+    ["LINEUP_PA_W_7", "0.93", "Expected PA weight for lineup slot 7"],
+    ["LINEUP_PA_W_8", "0.91", "Expected PA weight for lineup slot 8"],
+    ["LINEUP_PA_W_9", "0.91", "Expected PA weight for lineup slot 9"],
 
     ["PROJ_CACHE_HOURS", "12", "Min hours between projection refetch"],
     ["RAZZ_HIT_URL", "https://razzball.com/steamer-hitter-projections/", "Razzball hitters projections (HTML table)"],
@@ -142,6 +151,17 @@ function getConfig_() {
   cfg.MATCH_TOL_MIN = toInt_(cfg.MATCH_TOL_MIN, 360);
   cfg.LINEUP_MIN = toInt_(cfg.LINEUP_MIN, 9);
   cfg.LINEUP_FALLBACK_MODE = String(cfg.LINEUP_FALLBACK_MODE || "STRICT").toUpperCase();
+  cfg.LINEUP_PA_WEIGHTS = [
+    toFloat_(cfg.LINEUP_PA_W_1, 1.12),
+    toFloat_(cfg.LINEUP_PA_W_2, 1.08),
+    toFloat_(cfg.LINEUP_PA_W_3, 1.05),
+    toFloat_(cfg.LINEUP_PA_W_4, 1.03),
+    toFloat_(cfg.LINEUP_PA_W_5, 1.00),
+    toFloat_(cfg.LINEUP_PA_W_6, 0.97),
+    toFloat_(cfg.LINEUP_PA_W_7, 0.93),
+    toFloat_(cfg.LINEUP_PA_W_8, 0.91),
+    toFloat_(cfg.LINEUP_PA_W_9, 0.91)
+  ];
   cfg.PROJ_CACHE_HOURS = toFloat_(cfg.PROJ_CACHE_HOURS, 12);
   cfg.RAZZ_HIT_URL = String(cfg.RAZZ_HIT_URL || "").trim();
   cfg.RAZZ_PIT_URL = String(cfg.RAZZ_PIT_URL || "").trim();
