@@ -46,6 +46,8 @@ function removeTriggers() {
 
 /* ===================== DISCORD ===================== */
 
+var DISCORD_MESSAGE_DIVIDER = "────────────────────────";
+
 function getDiscordWebhook_(cfg) {
   return (cfg && cfg.DISCORD_WEBHOOK ? cfg.DISCORD_WEBHOOK : "") ||
     PropertiesService.getScriptProperties().getProperty(PROP.DISCORD_WEBHOOK) || "";
@@ -345,9 +347,11 @@ function sendDiscordTestPing() {
   var payload = {
     content:
       "✅ **Lucky Luciano MLB — Discord Test Ping**\n" +
+      DISCORD_MESSAGE_DIVIDER + "\n" +
       "**Sheet:** " + ss.getName() + "\n" +
       "**Local:** " + localPretty_(new Date()) + "\n" +
       "**UTC:** " + new Date().toISOString() + "\n" +
+      DISCORD_MESSAGE_DIVIDER + "\n" +
       "_If you see this, Discord delivery is connected and posting._"
   };
 
@@ -386,7 +390,9 @@ function sendDiscordActionButtonsTest() {
   var payloadObj = {
     content:
       "🧪 **Lucky Luciano MLB — Action Buttons Test**\n" +
+      DISCORD_MESSAGE_DIVIDER + "\n" +
       "Use this test message to validate Discord buttons and Web App routing.\n" +
+      DISCORD_MESSAGE_DIVIDER + "\n" +
       "This does **not** create or update betting logs.",
     components: [{
       type: 1,
@@ -454,6 +460,7 @@ function sendDiscordActionPayloadDiagnostics() {
       payload: {
         content:
           "🧪 **Discord Diagnostics — Content Only**\n" +
+          DISCORD_MESSAGE_DIVIDER + "\n" +
           "This probe includes only message content so operators can compare bot rendering behavior."
       }
     },
@@ -462,6 +469,7 @@ function sendDiscordActionPayloadDiagnostics() {
       payload: {
         content:
           "🧪 **Discord Diagnostics — Content + Components**\n" +
+          DISCORD_MESSAGE_DIVIDER + "\n" +
           "This probe includes a link button to verify component rendering via bot posts.",
         components: [{
           type: 1,
@@ -535,12 +543,14 @@ function sendDiscordHeartbeat() {
 
   var msg =
     "🫀 **Lucky Luciano MLB — Heartbeat (" + mode + ")**\n" +
+    DISCORD_MESSAGE_DIVIDER + "\n" +
     "**Local:** " + localPretty_(new Date()) + "\n" +
     "**UTC:** " + new Date().toISOString() + "\n";
 
   if (lastAt) msg += "**Last pipeline (UTC):** " + lastAt + "\n";
   if (lastStatus) msg += "**Last status:** " + lastStatus + "\n";
   if (lastSummary) msg += "**Last summary:** " + lastSummary + "\n";
+  msg += DISCORD_MESSAGE_DIVIDER + "\n";
   msg += "_If you see this, triggers + Discord delivery are working._";
 
   var res = sendDiscordByMode_(deliveryMode, { content: msg });
