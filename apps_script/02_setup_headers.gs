@@ -138,6 +138,8 @@ function ensureEdgeHeader_(sh) {
     "away_hitters_matched","home_hitters_matched","min_hitters_matched",
     "away_pitcher_name","home_pitcher_name","away_pitcher_matched","home_pitcher_matched",
     "bullpenAvailAway","bullpenAvailHome","bullpenAdjDelta",
+    "weatherApplied","bullpenFeatureApplied","experimentalApplied","weatherRunEnvDelta",
+    "bullpenRunPrevDeltaAway","bullpenRunPrevDeltaHome","experimentalRunEnvDelta","featureSet",
     "confidence","bet_side","bet_tier","bet_edge","units","notes","updated_at_local"
   ]);
 }
@@ -164,8 +166,8 @@ function ensureCalibrationSnapshotsHeader_(sh) {
     "away_team","home_team","away_team_id","home_team_id","bet_side","pick_team","pick_team_id",
     "pick_home_away","confidence","bet_tier","bet_edge","model_prob_pick","market_implied_pick",
     "model_prob_away","model_prob_home","market_implied_away","market_implied_home",
-    "away_odds_decimal","home_odds_decimal","units_suggested","notes","result","pnl_units",
-    "resolved_at_local","updated_at_local"
+    "away_odds_decimal","home_odds_decimal","units_suggested","notes","feature_set","weather_applied",
+    "bullpen_applied","experimental_applied","result","pnl_units","resolved_at_local","updated_at_local"
   ]);
 }
 

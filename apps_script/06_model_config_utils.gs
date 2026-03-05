@@ -42,6 +42,8 @@ function refreshModelAndEdge_core_(cfg, mlbRes) {
     ? mlbRes.matched
     : ((fallbackMatchRes = matchOddsToSchedule_(shOdds, shSched, toInt_(cfg.MATCH_TOL_MIN, 360))).matched || []);
 
+  var externalFeatureCtx = loadExternalFeatureContext_(cfg, matched);
+
   var todayKey = localDateKey_();
   var exposure = getExposureState_(shNotify, todayKey);
   var caps = getCaps_(cfg, mode);
@@ -55,6 +57,7 @@ function refreshModelAndEdge_core_(cfg, mlbRes) {
   var lineupFallbackGames = 0;
   var totalLineupSlots = 0, totalMatchedSlots = 0;
   var totalLineupWeight = 0, totalMatchedWeight = 0;
+  var weatherAppliedGames = 0, bullpenAppliedGames = 0, experimentalAppliedGames = 0;
 
   for (var m = 0; m < matched.length; m++) {
     var oddsId = String(matched[m].odds_game_id || "").trim();
@@ -141,7 +144,16 @@ function refreshModelAndEdge_core_(cfg, mlbRes) {
     var awayRunPrev = ((1 - bullpenShare) * awayPitFactor) + (bullpenShare * awayBp.factorAdj);
     var homeRunPrev = ((1 - bullpenShare) * homePitFactor) + (bullpenShare * homeBp.factorAdj);
     var bullpenAdjDelta = awayBp.factorAdj - homeBp.factorAdj;
-    var x = kOps * (awayOPS.ops - homeOPS.ops) + kPit * (awayRunPrev - homeRunPrev);
+
+    var extByGame = externalFeatureCtx.byGame[mlbPk] || {};
+    var featureAdj = buildFeatureAdjustmentsForGame_(cfg, extByGame);
+    if (featureAdj.weatherApplied) weatherAppliedGames++;
+    if (featureAdj.bullpenApplied) bullpenAppliedGames++;
+    if (featureAdj.experimentalApplied) experimentalAppliedGames++;
+
+    var awayRunPrevAdj = clamp_(0.08, 0.75, awayRunPrev + featureAdj.totalAwayRunPrevDelta + featureAdj.totalRunEnvDelta);
+    var homeRunPrevAdj = clamp_(0.08, 0.75, homeRunPrev + featureAdj.totalHomeRunPrevDelta - featureAdj.totalRunEnvDelta);
+    var x = kOps * (awayOPS.ops - homeOPS.ops) + kPit * (awayRunPrevAdj - homeRunPrevAdj);
     var pAway = clamp_(0.05, 0.95, 1 / (1 + Math.exp(-x)));
     var pHome = 1 - pAway;
 
@@ -216,6 +228,14 @@ function refreshModelAndEdge_core_(cfg, mlbRes) {
       bullpenAvailAway: awayBp.availability,
       bullpenAvailHome: homeBp.availability,
       bullpenAdjDelta: bullpenAdjDelta,
+      weatherApplied: featureAdj.weatherApplied ? "Y" : "N",
+      bullpenFeatureApplied: featureAdj.bullpenApplied ? "Y" : "N",
+      experimentalApplied: featureAdj.experimentalApplied ? "Y" : "N",
+      weatherRunEnvDelta: featureAdj.weatherRunEnvDelta,
+      bullpenRunPrevDeltaAway: featureAdj.bullpenAwayRunPrevDelta,
+      bullpenRunPrevDeltaHome: featureAdj.bullpenHomeRunPrevDelta,
+      experimentalRunEnvDelta: featureAdj.marketDelta + featureAdj.statcastDelta,
+      featureSet: (featureAdj.weatherApplied || featureAdj.bullpenApplied || featureAdj.experimentalApplied) ? "ENHANCED" : "BASELINE",
       confidence: conf, bet_side: bet.side || "", bet_tier: bet.tier || "", bet_edge: bet.side ? bet.edge : "",
       units: units, notes: notes || bet.notes || "", updated_at_local: isoLocalWithOffset_(new Date())
     }));
@@ -225,7 +245,7 @@ function refreshModelAndEdge_core_(cfg, mlbRes) {
 
   writeRowsByHeader_(shEdge, edgeRows);
 
-  var snapshotRes = persistCalibrationSnapshots_(cfg, edgeRows, schedByPk);
+  var snapshotRes = persistCalibrationSnapshots_(cfg, edgeRows, schedByPk, externalFeatureCtx);
 
   log_("INFO", "refreshModelAndEdge completed", {
     opsLeagueAvg: opsLeagueAvg,
@@ -244,6 +264,10 @@ function refreshModelAndEdge_core_(cfg, mlbRes) {
     lineupCoverageWeight: totalMatchedWeight + "/" + totalLineupWeight,
     bullpenWindowDays: bullpenCtx.windowDays,
     bullpenTeamsTracked: bullpenCtx.teamCount,
+    weatherAppliedGames: weatherAppliedGames,
+    bullpenFeatureAppliedGames: bullpenAppliedGames,
+    experimentalAppliedGames: experimentalAppliedGames,
+    externalFeatureHealth: externalFeatureCtx.health.bySource,
     calibrationSnapshotsUpserted: snapshotRes.upserted
   });
 
@@ -255,6 +279,11 @@ function refreshModelAndEdge_core_(cfg, mlbRes) {
     lineupFallbackGames: lineupFallbackGames,
     lineupCoverageUnweighted: totalLineupSlots > 0 ? (totalMatchedSlots / totalLineupSlots) : 0,
     lineupCoverageWeighted: totalLineupWeight > 0 ? (totalMatchedWeight / totalLineupWeight) : 0,
+    weatherAppliedGames: weatherAppliedGames,
+    bullpenFeatureAppliedGames: bullpenAppliedGames,
+    experimentalAppliedGames: experimentalAppliedGames,
+    externalFeatureHealth: externalFeatureCtx.health.bySource,
+    externalFeatureFetchLogs: externalFeatureCtx.diagnostics.fetchLogs,
     calibrationSnapshotsUpserted: snapshotRes.upserted
   };
 }
