@@ -17,6 +17,7 @@ function refreshModelAndEdge_core_(cfg, mlbRes) {
   var requirePitcherMatch = String(cfg.REQUIRE_PITCHER_MATCH || "false").toLowerCase() === "true";
   var lineupFallbackMode = String(cfg.LINEUP_FALLBACK_MODE || "STRICT").toUpperCase();
   var allowLineupFallback = (lineupFallbackMode === "FALLBACK");
+  var lineupPaWeights = getLineupPaWeights_(cfg, lineupMin);
 
   var oddsArr = readSheetAsObjects_(shOdds), oddsById = {};
   for (var i = 0; i < oddsArr.length; i++) {
@@ -51,6 +52,8 @@ function refreshModelAndEdge_core_(cfg, mlbRes) {
   var betSignalsFound = 0;
   var skippedNoMatch = 0, skippedLineups = 0, skippedPitchers = 0;
   var lineupFallbackGames = 0;
+  var totalLineupSlots = 0, totalMatchedSlots = 0;
+  var totalLineupWeight = 0, totalMatchedWeight = 0;
 
   for (var m = 0; m < matched.length; m++) {
     var oddsId = String(matched[m].odds_game_id || "").trim();
@@ -94,8 +97,13 @@ function refreshModelAndEdge_core_(cfg, mlbRes) {
       homeLu = buildFallbackLineup_(homeLu, lineupMin, homeTeam);
     }
 
-    var awayOPS = lineupOPS_(awayLu, opsMapObj.map, opsLeagueAvg);
-    var homeOPS = lineupOPS_(homeLu, opsMapObj.map, opsLeagueAvg);
+    var awayOPS = lineupOPS_(awayLu, opsMapObj.map, opsLeagueAvg, lineupPaWeights);
+    var homeOPS = lineupOPS_(homeLu, opsMapObj.map, opsLeagueAvg, lineupPaWeights);
+
+    totalLineupSlots += awayOPS.slots + homeOPS.slots;
+    totalMatchedSlots += awayOPS.matched + homeOPS.matched;
+    totalLineupWeight += awayOPS.totalWeight + homeOPS.totalWeight;
+    totalMatchedWeight += awayOPS.matchedWeight + homeOPS.matchedWeight;
 
     var sched = schedByPk[mlbPk] || null;
     var awayP = sched ? String(sched.away_probable_pitcher || "") : "";
@@ -215,7 +223,11 @@ function refreshModelAndEdge_core_(cfg, mlbRes) {
     betSignalsFound: betSignalsFound,
     lineupFallbackMode: lineupFallbackMode,
     lineupFallbackUsed: lineupFallbackGames > 0,
-    lineupFallbackGames: lineupFallbackGames
+    lineupFallbackGames: lineupFallbackGames,
+    lineupCoverageUnweighted: totalLineupSlots > 0 ? (totalMatchedSlots / totalLineupSlots) : 0,
+    lineupCoverageWeighted: totalLineupWeight > 0 ? (totalMatchedWeight / totalLineupWeight) : 0,
+    lineupCoverageSlots: totalMatchedSlots + "/" + totalLineupSlots,
+    lineupCoverageWeight: totalMatchedWeight + "/" + totalLineupWeight
   });
 
   return {
@@ -223,7 +235,9 @@ function refreshModelAndEdge_core_(cfg, mlbRes) {
     betSignalsFound: betSignalsFound,
     lineupFallbackMode: lineupFallbackMode,
     lineupFallbackUsed: lineupFallbackGames > 0,
-    lineupFallbackGames: lineupFallbackGames
+    lineupFallbackGames: lineupFallbackGames,
+    lineupCoverageUnweighted: totalLineupSlots > 0 ? (totalMatchedSlots / totalLineupSlots) : 0,
+    lineupCoverageWeighted: totalLineupWeight > 0 ? (totalMatchedWeight / totalLineupWeight) : 0
   };
 }
 
@@ -317,16 +331,44 @@ function buildSIERAMap_(shPit) {
   return { map: map };
 }
 
-function lineupOPS_(lineupArr, opsMap, fallbackOPS) {
-  var matched = 0, sum = 0;
+function getLineupPaWeights_(cfg, lineupMin) {
+  var raw = cfg.LINEUP_PA_WEIGHTS;
+  var defaults = [1.12, 1.08, 1.05, 1.03, 1.00, 0.97, 0.93, 0.91, 0.91];
+  var out = [];
+  for (var i = 0; i < lineupMin; i++) {
+    var w = (raw && raw[i] !== undefined) ? Number(raw[i]) : defaults[Math.min(i, defaults.length - 1)];
+    if (!isFinite(w) || w <= 0) w = defaults[Math.min(i, defaults.length - 1)];
+    out.push(w);
+  }
+  return out;
+}
+
+function lineupOPS_(lineupArr, opsMap, fallbackOPS, paWeights) {
+  var matched = 0, weightedSum = 0, totalWeight = 0, matchedWeight = 0;
   for (var i = 0; i < lineupArr.length; i++) {
     var key = normName_(lineupArr[i].player_name || "");
     var ops = opsMap[key];
-    if (ops !== undefined && isFinite(ops)) { matched++; sum += Number(ops); }
-    else sum += fallbackOPS;
+    var w = (paWeights && paWeights[i] !== undefined) ? Number(paWeights[i]) : 1;
+    if (!isFinite(w) || w <= 0) w = 1;
+
+    totalWeight += w;
+    if (ops !== undefined && isFinite(ops)) {
+      matched++;
+      matchedWeight += w;
+      weightedSum += Number(ops) * w;
+    } else {
+      weightedSum += fallbackOPS * w;
+    }
   }
-  var opsAvg = (lineupArr.length > 0) ? (sum / lineupArr.length) : fallbackOPS;
-  return { ops: opsAvg, matched: matched };
+
+  var opsAvg = (totalWeight > 0) ? (weightedSum / totalWeight) : fallbackOPS;
+  return {
+    ops: opsAvg,
+    matched: matched,
+    slots: lineupArr.length,
+    totalWeight: totalWeight,
+    matchedWeight: matchedWeight
+  };
 }
 
 function pitcherSIERA_(pitcherName, sieraMap, fallbackSIERA) {
