@@ -14,6 +14,10 @@ function ensureSettings_(sh) {
     ["ACTION_TOKEN_TTL_MIN", "60", "Token TTL in minutes for action links"],
 
     ["PIPELINE_MINUTES", "15", "Pipeline trigger frequency"],
+    ["PIPELINE_DEGRADE_ZERO_STREAK_THRESHOLD", "3", "Consecutive runs with matched==0 OR computed==0 before degraded cadence starts"],
+    ["PIPELINE_DEGRADE_LEVEL2_THRESHOLD", "6", "Consecutive zero-data runs before strongest degraded cadence"],
+    ["PIPELINE_DEGRADE_MINUTES_L1", "30", "Pipeline cadence minutes while degraded level 1 is active"],
+    ["PIPELINE_DEGRADE_MINUTES_L2", "60", "Pipeline cadence minutes while degraded level 2 is active"],
 
     ["HEARTBEAT_MODE", "DAILY", "OFF / DAILY / HOURLY"],
     ["HEARTBEAT_HOUR", "9", "Daily heartbeat hour (script timezone)"],
@@ -111,6 +115,10 @@ function getConfig_() {
   cfg.ACTION_TOKEN_SECRET = String(cfg.ACTION_TOKEN_SECRET || "").trim();
   cfg.ACTION_TOKEN_TTL_MIN = toInt_(cfg.ACTION_TOKEN_TTL_MIN, 60);
   cfg.PIPELINE_MINUTES = toInt_(cfg.PIPELINE_MINUTES, 15);
+  cfg.PIPELINE_DEGRADE_ZERO_STREAK_THRESHOLD = toInt_(cfg.PIPELINE_DEGRADE_ZERO_STREAK_THRESHOLD, 3);
+  cfg.PIPELINE_DEGRADE_LEVEL2_THRESHOLD = toInt_(cfg.PIPELINE_DEGRADE_LEVEL2_THRESHOLD, 6);
+  cfg.PIPELINE_DEGRADE_MINUTES_L1 = toInt_(cfg.PIPELINE_DEGRADE_MINUTES_L1, 30);
+  cfg.PIPELINE_DEGRADE_MINUTES_L2 = toInt_(cfg.PIPELINE_DEGRADE_MINUTES_L2, 60);
   cfg.HEARTBEAT_MODE = String(cfg.HEARTBEAT_MODE || "DAILY").toUpperCase();
   cfg.HEARTBEAT_HOUR = toInt_(cfg.HEARTBEAT_HOUR, 9);
   cfg.HEARTBEAT_MINUTE = toInt_(cfg.HEARTBEAT_MINUTE, 5);
