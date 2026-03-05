@@ -36,6 +36,7 @@ function ensureSettings_(sh) {
 
     ["MATCH_TOL_MIN", "360", "Team+time match tolerance (minutes)"],
     ["LINEUP_MIN", "9", "Min hitters per lineup"],
+    ["LINEUP_FALLBACK_MODE", "STRICT", "STRICT or FALLBACK"],
 
     ["PROJ_CACHE_HOURS", "12", "Min hours between projection refetch"],
     ["RAZZ_HIT_URL", "https://razzball.com/steamer-hitter-projections/", "Razzball hitters projections (HTML table)"],
@@ -128,6 +129,7 @@ function getConfig_() {
   cfg.ODDS_NO_GAMES_BEHAVIOR = String(cfg.ODDS_NO_GAMES_BEHAVIOR || "SKIP").toUpperCase();
   cfg.MATCH_TOL_MIN = toInt_(cfg.MATCH_TOL_MIN, 360);
   cfg.LINEUP_MIN = toInt_(cfg.LINEUP_MIN, 9);
+  cfg.LINEUP_FALLBACK_MODE = String(cfg.LINEUP_FALLBACK_MODE || "STRICT").toUpperCase();
   cfg.PROJ_CACHE_HOURS = toFloat_(cfg.PROJ_CACHE_HOURS, 12);
   cfg.RAZZ_HIT_URL = String(cfg.RAZZ_HIT_URL || "").trim();
   cfg.RAZZ_PIT_URL = String(cfg.RAZZ_PIT_URL || "").trim();

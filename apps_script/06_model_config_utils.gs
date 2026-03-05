@@ -15,6 +15,8 @@ function refreshModelAndEdge_core_(cfg, mlbRes) {
   var defaultOPS = toFloat_(cfg.LEAGUE_AVG_OPS, 0.675);
   var defaultSIERA = toFloat_(cfg.DEFAULT_PITCHER_SIERA, 4.20);
   var requirePitcherMatch = String(cfg.REQUIRE_PITCHER_MATCH || "false").toLowerCase() === "true";
+  var lineupFallbackMode = String(cfg.LINEUP_FALLBACK_MODE || "STRICT").toUpperCase();
+  var allowLineupFallback = (lineupFallbackMode === "FALLBACK");
 
   var oddsArr = readSheetAsObjects_(shOdds), oddsById = {};
   for (var i = 0; i < oddsArr.length; i++) {
@@ -48,6 +50,7 @@ function refreshModelAndEdge_core_(cfg, mlbRes) {
   var computed = 0;
   var betSignalsFound = 0;
   var skippedNoMatch = 0, skippedLineups = 0, skippedPitchers = 0;
+  var lineupFallbackGames = 0;
 
   for (var m = 0; m < matched.length; m++) {
     var oddsId = String(matched[m].odds_game_id || "").trim();
@@ -64,23 +67,31 @@ function refreshModelAndEdge_core_(cfg, mlbRes) {
     var awayLu = lu.away.slice(0).sort(sortBatOrder_).slice(0, lineupMin);
     var homeLu = lu.home.slice(0).sort(sortBatOrder_).slice(0, lineupMin);
     var ready = (awayLu.length >= lineupMin && homeLu.length >= lineupMin);
+    var lineupFallbackUsed = false;
 
     if (!ready) {
-      skippedLineups++;
-      edgeRows.push(makeEdgeRow_({
-        odds_game_id: oddsId, mlb_gamePk: mlbPk,
-        commence_time_local: String(matched[m].commence_time_local || ""),
-        away_team: awayTeam, home_team: homeTeam,
-        away_odds_decimal: o.away_odds_decimal, home_odds_decimal: o.home_odds_decimal,
-        away_implied: implied_(o.away_odds_decimal, o.away_implied), home_implied: implied_(o.home_odds_decimal, o.home_implied),
-        model_p_away: "", model_p_home: "", edge_away: "", edge_home: "",
-        away_hitters_matched: awayLu.length, home_hitters_matched: homeLu.length,
-        min_hitters_matched: Math.min(awayLu.length, homeLu.length),
-        away_pitcher_name: "", home_pitcher_name: "", away_pitcher_matched: "", home_pitcher_matched: "",
-        confidence: "", bet_side: "", bet_tier: "", bet_edge: "", units: "",
-        notes: "WAIT_LINEUPS", updated_at_local: isoLocalWithOffset_(new Date())
-      }));
-      continue;
+      if (!allowLineupFallback) {
+        skippedLineups++;
+        edgeRows.push(makeEdgeRow_({
+          odds_game_id: oddsId, mlb_gamePk: mlbPk,
+          commence_time_local: String(matched[m].commence_time_local || ""),
+          away_team: awayTeam, home_team: homeTeam,
+          away_odds_decimal: o.away_odds_decimal, home_odds_decimal: o.home_odds_decimal,
+          away_implied: implied_(o.away_odds_decimal, o.away_implied), home_implied: implied_(o.home_odds_decimal, o.home_implied),
+          model_p_away: "", model_p_home: "", edge_away: "", edge_home: "",
+          away_hitters_matched: awayLu.length, home_hitters_matched: homeLu.length,
+          min_hitters_matched: Math.min(awayLu.length, homeLu.length),
+          away_pitcher_name: "", home_pitcher_name: "", away_pitcher_matched: "", home_pitcher_matched: "",
+          confidence: "", bet_side: "", bet_tier: "", bet_edge: "", units: "",
+          notes: "WAIT_LINEUPS", updated_at_local: isoLocalWithOffset_(new Date())
+        }));
+        continue;
+      }
+
+      lineupFallbackUsed = true;
+      lineupFallbackGames++;
+      awayLu = buildFallbackLineup_(awayLu, lineupMin, awayTeam);
+      homeLu = buildFallbackLineup_(homeLu, lineupMin, homeTeam);
     }
 
     var awayOPS = lineupOPS_(awayLu, opsMapObj.map, opsLeagueAvg);
@@ -124,11 +135,11 @@ function refreshModelAndEdge_core_(cfg, mlbRes) {
     var homeNoVig = isFinite(vigSum) ? (homeImp / vigSum) : NaN;
     var edgeAway = (isFinite(awayImp) ? (pAway - awayImp) : "");
     var edgeHome = (isFinite(homeImp) ? (pHome - homeImp) : "");
-    var conf = confidence_(mode, awayOPS.matched, homeOPS.matched, awaySI.matched, homeSI.matched);
+    var conf = confidence_(mode, awayOPS.matched, homeOPS.matched, awaySI.matched, homeSI.matched, lineupFallbackUsed);
 
     var bet = pickBetSignal_(edgeAway, edgeHome, conf, th);
     var units = "";
-    var notes = "";
+    var notes = lineupFallbackUsed ? "LINEUP_FALLBACK" : "";
 
     if (bet.side) {
       if (exposure.plays >= caps.maxPlays) {
@@ -201,10 +212,19 @@ function refreshModelAndEdge_core_(cfg, mlbRes) {
     skippedNoMatch: skippedNoMatch,
     skippedLineups: skippedLineups,
     skippedPitchers: skippedPitchers,
-    betSignalsFound: betSignalsFound
+    betSignalsFound: betSignalsFound,
+    lineupFallbackMode: lineupFallbackMode,
+    lineupFallbackUsed: lineupFallbackGames > 0,
+    lineupFallbackGames: lineupFallbackGames
   });
 
-  return { computed: computed, betSignalsFound: betSignalsFound };
+  return {
+    computed: computed,
+    betSignalsFound: betSignalsFound,
+    lineupFallbackMode: lineupFallbackMode,
+    lineupFallbackUsed: lineupFallbackGames > 0,
+    lineupFallbackGames: lineupFallbackGames
+  };
 }
 
 function makeEdgeRow_(obj) { return obj; }
@@ -326,7 +346,7 @@ function implied_(decOdds, fallbackImp) {
 
 function clamp_(lo, hi, x) { return Math.max(lo, Math.min(hi, x)); }
 
-function confidence_(mode, awayHitMatched, homeHitMatched, awayPitMatched, homePitMatched) {
+function confidence_(mode, awayHitMatched, homeHitMatched, awayPitMatched, homePitMatched, lineupFallbackUsed) {
   var c = 50;
   c += (awayHitMatched / 9) * 20;
   c += (homeHitMatched / 9) * 20;
@@ -336,7 +356,21 @@ function confidence_(mode, awayHitMatched, homeHitMatched, awayPitMatched, homeP
   var miss = (9 - awayHitMatched) + (9 - homeHitMatched);
   var missPenalty = (String(mode).toUpperCase() === "PRESEASON") ? 2.0 : 3.5;
   c -= miss * missPenalty;
+  if (lineupFallbackUsed) c -= 8;
   return clamp_(0, 100, c);
+}
+
+function buildFallbackLineup_(lineupArr, lineupMin, teamName) {
+  var out = lineupArr ? lineupArr.slice(0, lineupMin) : [];
+  var next = out.length + 1;
+  while (out.length < lineupMin) {
+    out.push({
+      bat_order: next,
+      player_name: String(teamName || "Team") + " Default Batter " + next
+    });
+    next++;
+  }
+  return out;
 }
 
 function getThresholds_(cfg, mode) {
