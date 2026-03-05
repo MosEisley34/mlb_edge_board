@@ -447,8 +447,6 @@ function maybeNotifyDiscord_(cfg, oddsId, dateKey, payload) {
     mode: payload.mode
   });
 
-  var links = buildActionLinks_(cfg, betId);
-
   var msg =
     "📈 **" + payload.mode + " MODEL SIGNAL — " + payload.bet.tier + "**\n" +
     "**" + payload.awayTeam + " @ " + payload.homeTeam + "**\n" +
@@ -462,28 +460,9 @@ function maybeNotifyDiscord_(cfg, oddsId, dateKey, payload) {
     "🆔 BetId: `" + betId + "` | OddsId: `" + oddsId + "`";
 
   var payloadObj = { content: msg };
-  if (links) {
-    payloadObj.components = [
-      {
-        type: 1,
-        components: [
-          { type: 2, style: 5, label: "📝 Confirm Placed", url: links.confirm },
-          { type: 2, style: 5, label: "🟩 Mark Win", url: links.markWin },
-          { type: 2, style: 5, label: "🟥 Mark Loss", url: links.markLoss }
-        ]
-      },
-      {
-        type: 1,
-        components: [
-          { type: 2, style: 5, label: "📋 View Pending", url: links.pending }
-        ]
-      }
-    ];
-  }
-
-  var includesComponents = !!(payloadObj && payloadObj.components && payloadObj.components.length);
-  var deliveryMode = discordDeliveryMode_(cfg, { allowWebhook: !includesComponents });
-  if (deliveryMode.mode === "missing" || deliveryMode.mode === "missing_bot") {
+  var includesComponents = false;
+  var deliveryMode = discordDeliveryMode_(cfg, { allowWebhook: true });
+  if (deliveryMode.mode === "missing") {
     appendBetEvent_(betId, "DISCORD_FAILED", "PENDING", "PENDING", {
       http: 0,
       body: "missing Discord delivery config",

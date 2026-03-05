@@ -12,8 +12,6 @@ function onOpen() {
     .addItem("Compute Model/Edge Now", "refreshModelAndEdgeOnly")
     .addSeparator()
     .addItem("Send Discord Test Ping", "sendDiscordTestPing")
-    .addItem("Send Discord Action Buttons Test", "sendDiscordActionButtonsTest")
-    .addItem("Run Discord Bot Preflight", "sendDiscordBotPreflightDiagnostics")
     .addItem("Send Heartbeat Now", "sendDiscordHeartbeat")
     .addSeparator()
     .addItem("Install Triggers", "installTriggers")

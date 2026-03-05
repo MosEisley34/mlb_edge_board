@@ -9,8 +9,6 @@ function ensureSettings_(sh) {
 
     ["ODDS_API_KEY", "", "TheOddsAPI key"],
     ["DISCORD_WEBHOOK", "", "Discord webhook URL (plain text notices)"],
-    ["DISCORD_BOT_TOKEN", "", "Discord bot token for app-based action messages"],
-    ["DISCORD_CHANNEL_ID", "", "Discord channel ID for bot posts"],
     ["WEB_APP_URL", "", "Apps Script Web App URL for secure Discord action links"],
     ["ACTION_TOKEN_SECRET", "", "Secret used to sign Discord action tokens"],
     ["ACTION_TOKEN_TTL_MIN", "60", "Token TTL in minutes for action links"],
