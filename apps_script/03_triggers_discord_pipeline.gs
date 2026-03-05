@@ -75,7 +75,9 @@ function discordBotAuthHeader_(botToken) {
 }
 
 function sendDiscordWebhook_(webhook, payloadObj) {
-  var resp = UrlFetchApp.fetch(webhook, {
+  var endpoint = String(webhook || "");
+  endpoint += (endpoint.indexOf("?") >= 0 ? "&" : "?") + "wait=true";
+  var resp = UrlFetchApp.fetch(endpoint, {
     method: "post",
     contentType: "application/json",
     payload: JSON.stringify(payloadObj),

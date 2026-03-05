@@ -440,7 +440,9 @@ function maybeNotifyDiscord_(cfg, oddsId, dateKey, payload) {
   var modelP = (payload.bet.side === "AWAY") ? payload.pAway : payload.pHome;
   var edge = Number(payload.bet.edge);
   var nowMs = new Date().getTime();
+  var isSameDaySignal = (String(prevState.dateKey || "") === String(dateKey || ""));
 
+  var reason = "";
   if (isFinite(prevState.lastSentMs) && cooldownMin > 0) {
     var minsSinceLast = (nowMs - prevState.lastSentMs) / 60000;
     if (minsSinceLast < cooldownMin) {
@@ -453,6 +455,7 @@ function maybeNotifyDiscord_(cfg, oddsId, dateKey, payload) {
       });
       return false;
     }
+    reason = "cooldown_expired";
   }
 
   var hasPriorMetrics = isFinite(prevState.lastPrice) && isFinite(prevState.lastEdge);
@@ -469,6 +472,12 @@ function maybeNotifyDiscord_(cfg, oddsId, dateKey, payload) {
       tier: payload.bet.tier
     });
     return false;
+  }
+
+  if (!reason) {
+    if (tierChanged) reason = "tier_upgrade";
+    else if (hasPriorMetrics && edgeMovePct >= minEdgeMovePct) reason = "edge_delta";
+    else reason = "cooldown_expired";
   }
 
   var betId = createPendingBet_(cfg, {
@@ -501,6 +510,18 @@ function maybeNotifyDiscord_(cfg, oddsId, dateKey, payload) {
     "📚 Coverage: " + payload.coverageAway + " vs " + payload.coverageHome + " | ⚾ Pitchers: " + payload.pitchers + "\n" +
     "🆔 BetId: `" + betId + "` | OddsId: `" + oddsId + "`";
 
+  var isUpdate = isSameDaySignal && !!prevState.lastBetId;
+  if (isUpdate) {
+    msg =
+      "🔁 SIGNAL UPDATE\n" +
+      "Prior BetId: `" + prevState.lastBetId + "` → New BetId: `" + betId + "`\n" +
+      "Reason: `" + reason + "`\n" +
+      "Tier: **" + (prevState.lastTier || "?") + "** → **" + String(payload.bet.tier || "") + "**\n" +
+      "Odds: **" + (isFinite(prevState.lastPrice) ? prevState.lastPrice : "?") + "** → **" + (isFinite(price) ? price : "?") + "**\n" +
+      "Edge: **" + (isFinite(prevState.lastEdge) ? (prevState.lastEdge * 100).toFixed(2) + "%" : "?") + "** → **" + (isFinite(edge) ? (edge * 100).toFixed(2) + "%" : "?") + "**\n\n" +
+      msg;
+  }
+
   var payloadObj = { content: msg };
   var includesComponents = false;
   var deliveryMode = discordDeliveryMode_(cfg, { allowWebhook: true });
@@ -509,7 +530,8 @@ function maybeNotifyDiscord_(cfg, oddsId, dateKey, payload) {
       http: 0,
       body: "missing Discord delivery config",
       includesComponents: includesComponents,
-      deliveryMode: deliveryMode.mode
+      deliveryMode: deliveryMode.mode,
+      update_reason: reason || ""
     });
     log_("WARN", "Discord notify skipped: missing delivery config", { includesComponents: includesComponents, deliveryMode: deliveryMode.mode });
     return false;
@@ -517,6 +539,7 @@ function maybeNotifyDiscord_(cfg, oddsId, dateKey, payload) {
 
   var res = sendDiscordByMode_(deliveryMode, payloadObj);
   if (res.http >= 200 && res.http < 300) {
+    var messageId = discordMessageIdFromBody_(res.body);
     props.setProperty(key, JSON.stringify({
       sig: sig,
       dateKey: dateKey,
@@ -524,13 +547,17 @@ function maybeNotifyDiscord_(cfg, oddsId, dateKey, payload) {
       lastSentMs: nowMs,
       lastPrice: isFinite(price) ? round_(price, 4) : "",
       lastEdge: isFinite(edge) ? round_(edge, 6) : "",
-      lastTier: String(payload.bet.tier || "")
+      lastTier: String(payload.bet.tier || ""),
+      lastBetId: String(betId || ""),
+      lastDiscordMessageId: String(messageId || "")
     }));
-    appendBetEvent_(betId, "DISCORD_SENT", "PENDING", "PENDING", {
+    appendBetEvent_(betId, isUpdate ? "DISCORD_UPDATE_SENT" : "DISCORD_SENT", "PENDING", "PENDING", {
       http: res.http,
       body: String(res.body || "").slice(0, 200),
       includesComponents: includesComponents,
-      deliveryMode: res.deliveryMode
+      deliveryMode: res.deliveryMode,
+      discord_message_id: String(messageId || ""),
+      update_reason: reason || ""
     });
     return true;
   }
@@ -539,7 +566,8 @@ function maybeNotifyDiscord_(cfg, oddsId, dateKey, payload) {
     http: res.http,
     body: String(res.body || "").slice(0, 200),
     includesComponents: includesComponents,
-    deliveryMode: res.deliveryMode
+    deliveryMode: res.deliveryMode,
+    update_reason: reason || ""
   });
   log_("WARN", "Discord notify failed", {
     http: res.http,
@@ -557,7 +585,9 @@ function parseNotifyState_(raw) {
     lastSentMs: NaN,
     lastPrice: NaN,
     lastEdge: NaN,
-    lastTier: ""
+    lastTier: "",
+    lastBetId: "",
+    lastDiscordMessageId: ""
   };
   var s = String(raw || "").trim();
   if (!s) return out;
@@ -579,10 +609,19 @@ function parseNotifyState_(raw) {
     out.lastPrice = toFloat_(obj.lastPrice, NaN);
     out.lastEdge = toFloat_(obj.lastEdge, NaN);
     out.lastTier = String(obj.lastTier || "");
+    out.lastBetId = String(obj.lastBetId || "");
+    out.lastDiscordMessageId = String(obj.lastDiscordMessageId || "");
   } catch (e) {
     out.sig = s;
   }
   return out;
+}
+
+function discordMessageIdFromBody_(bodyText) {
+  var parsed = null;
+  try { parsed = JSON.parse(String(bodyText || "")); } catch (e) { parsed = null; }
+  if (parsed && parsed.id !== undefined && parsed.id !== null) return String(parsed.id);
+  return "";
 }
 
 function getExposureState_(shNotify, dateKey) {
