@@ -12,6 +12,7 @@ This folder contains a split version of your Google Apps Script code so you can 
 7. `06_model_config_utils.gs`
 8. `07_settings_and_utils.gs`
 9. `08_bet_actions.gs`
+10. `09_calibration.gs`
 
 Apps Script loads global functions/variables across files, so order is mostly for readability.
 

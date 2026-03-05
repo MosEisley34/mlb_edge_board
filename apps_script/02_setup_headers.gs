@@ -17,6 +17,8 @@ function setup() {
   getOrCreateSheet_(ss, SH.NOTIFY_STATE);
   getOrCreateSheet_(ss, SH.BET_LOG);
   getOrCreateSheet_(ss, SH.BET_EVENTS);
+  getOrCreateSheet_(ss, SH.CALIBRATION_SNAPSHOTS);
+  getOrCreateSheet_(ss, SH.CALIBRATION_REPORT);
 
   ensureLogHeader_(ss.getSheetByName(SH.LOG));
   ensureOddsHeader_(ss.getSheetByName(SH.ODDS_RAW));
@@ -29,6 +31,8 @@ function setup() {
   ensureNotifyStateHeader_(ss.getSheetByName(SH.NOTIFY_STATE));
   ensureBetLogHeader_(ss.getSheetByName(SH.BET_LOG));
   ensureBetEventsHeader_(ss.getSheetByName(SH.BET_EVENTS));
+  ensureCalibrationSnapshotsHeader_(ss.getSheetByName(SH.CALIBRATION_SNAPSHOTS));
+  ensureCalibrationReportHeader_(ss.getSheetByName(SH.CALIBRATION_REPORT));
 
   log_("INFO", "Sheets created/verified.", {
     script_tz: Session.getScriptTimeZone(),
@@ -41,7 +45,7 @@ function resetWorkbook() {
   var names = [
     SH.LOG, SH.ODDS_RAW, SH.MLB_SCHEDULE, SH.MLB_LINEUPS,
     SH.BATTER_PROJ, SH.PITCHER_PROJ, SH.EDGE_BOARD, SH.PLAYER_MAP, SH.NOTIFY_STATE,
-    SH.BET_LOG, SH.BET_EVENTS
+    SH.BET_LOG, SH.BET_EVENTS, SH.CALIBRATION_SNAPSHOTS, SH.CALIBRATION_REPORT
   ];
   for (var i = 0; i < names.length; i++) {
     var sh = ss.getSheetByName(names[i]);
@@ -59,6 +63,8 @@ function resetWorkbook() {
   getOrCreateSheet_(ss, SH.NOTIFY_STATE);
   getOrCreateSheet_(ss, SH.BET_LOG);
   getOrCreateSheet_(ss, SH.BET_EVENTS);
+  getOrCreateSheet_(ss, SH.CALIBRATION_SNAPSHOTS);
+  getOrCreateSheet_(ss, SH.CALIBRATION_REPORT);
 
   ensureLogHeader_(ss.getSheetByName(SH.LOG));
   ensureOddsHeader_(ss.getSheetByName(SH.ODDS_RAW));
@@ -71,6 +77,8 @@ function resetWorkbook() {
   ensureNotifyStateHeader_(ss.getSheetByName(SH.NOTIFY_STATE));
   ensureBetLogHeader_(ss.getSheetByName(SH.BET_LOG));
   ensureBetEventsHeader_(ss.getSheetByName(SH.BET_EVENTS));
+  ensureCalibrationSnapshotsHeader_(ss.getSheetByName(SH.CALIBRATION_SNAPSHOTS));
+  ensureCalibrationReportHeader_(ss.getSheetByName(SH.CALIBRATION_REPORT));
 
   var props = PropertiesService.getScriptProperties();
   var all = props.getProperties();
@@ -83,6 +91,7 @@ function resetWorkbook() {
   props.deleteProperty(PROP.LAST_PIPELINE_AT);
   props.deleteProperty(PROP.LAST_PIPELINE_STATUS);
   props.deleteProperty(PROP.LAST_PIPELINE_SUMMARY);
+  props.deleteProperty(PROP.LAST_CALIBRATION_SUMMARY);
   props.deleteProperty(PROP.LAST_HEARTBEAT_KEY);
   props.deleteProperty(PROP.ODDS_WINDOW_CACHE);
   props.deleteProperty(PROP.DISCORD_WEBHOOK);
@@ -106,7 +115,7 @@ function ensureOddsHeader_(sh) {
 
 function ensureScheduleHeader_(sh) {
   setHeader_(sh, [
-    "mlb_gamePk","mlb_gameGuid","gameDate_utc","away_team","home_team",
+    "mlb_gamePk","mlb_gameGuid","gameDate_utc","away_team","home_team","away_team_id","home_team_id",
     "away_probable_pitcher","home_probable_pitcher","status","venue","updated_at_local"
   ]);
 }
@@ -147,4 +156,21 @@ function ensureBetLogHeader_(sh) {
 }
 function ensureBetEventsHeader_(sh) {
   setHeader_(sh, ["event_at_local","bet_id","event","from_status","to_status","detail"]);
+}
+
+function ensureCalibrationSnapshotsHeader_(sh) {
+  setHeader_(sh, [
+    "snapshot_id","snapshot_date_local","snapshot_at_local","odds_game_id","mlb_gamePk",
+    "away_team","home_team","away_team_id","home_team_id","bet_side","pick_team","pick_team_id",
+    "pick_home_away","confidence","bet_tier","bet_edge","model_prob_pick","market_implied_pick",
+    "model_prob_away","model_prob_home","market_implied_away","market_implied_home",
+    "away_odds_decimal","home_odds_decimal","units_suggested","notes","result","pnl_units",
+    "resolved_at_local","updated_at_local"
+  ]);
+}
+
+function ensureCalibrationReportHeader_(sh) {
+  setHeader_(sh, [
+    "run_at_local","window_days","sample_size","resolved_count","pending_count","report_json","summary"
+  ]);
 }

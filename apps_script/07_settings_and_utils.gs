@@ -69,6 +69,9 @@ function ensureSettings_(sh) {
     ["NOTIFY_MIN_ODDS_MOVE", "0.03", "Minimum decimal odds change required to re-notify"],
     ["NOTIFY_MIN_EDGE_MOVE_PCT", "0.75", "Minimum edge change (percentage points) required to re-notify"],
 
+    ["CALIBRATION_WINDOW_DAYS", "30", "Days of snapshots to include in calibration report"],
+    ["CALIBRATION_EDGE_BUCKETS", "0,0.02,0.04,0.06,0.10", "Absolute edge bucket boundaries for calibration summaries"],
+
     ["RS_EDGE_MICRO", "0.020", ""], ["RS_EDGE_SMALL", "0.040", ""], ["RS_EDGE_MED", "0.055", ""], ["RS_EDGE_STRONG", "0.065", ""], ["RS_CONF_MIN", "62", ""],
     ["PS_EDGE_MICRO", "0.018", ""], ["PS_EDGE_SMALL", "0.028", ""], ["PS_EDGE_MED", "0.040", ""], ["PS_EDGE_STRONG", "0.050", ""], ["PS_CONF_MIN", "55", ""],
 
@@ -178,6 +181,8 @@ function getConfig_() {
   cfg.NOTIFY_COOLDOWN_MIN = toFloat_(cfg.NOTIFY_COOLDOWN_MIN, 60);
   cfg.NOTIFY_MIN_ODDS_MOVE = toFloat_(cfg.NOTIFY_MIN_ODDS_MOVE, 0.03);
   cfg.NOTIFY_MIN_EDGE_MOVE_PCT = toFloat_(cfg.NOTIFY_MIN_EDGE_MOVE_PCT, 0.75);
+  cfg.CALIBRATION_WINDOW_DAYS = Math.max(7, toInt_(cfg.CALIBRATION_WINDOW_DAYS, 30));
+  cfg.CALIBRATION_EDGE_BUCKETS = parseNumberList_(cfg.CALIBRATION_EDGE_BUCKETS, [0, 0.02, 0.04, 0.06, 0.10]);
 
   return cfg;
 }
@@ -302,6 +307,21 @@ function mapToString_(arr) { var out = []; for (var i = 0; i < arr.length; i++) 
 function indexOf_(arr, val) { for (var i = 0; i < arr.length; i++) if (String(arr[i]) === String(val)) return i; return -1; }
 function toInt_(v, def) { var n = parseInt(v, 10); return isFinite(n) ? n : def; }
 function toFloat_(v, def) { var n = parseFloat(v); return isFinite(n) ? n : def; }
+function parseNumberList_(v, fallbackArr) {
+  var raw = String(v || "").trim();
+  var out = [];
+  if (raw) {
+    var parts = raw.split(",");
+    for (var i = 0; i < parts.length; i++) {
+      var n = Number(String(parts[i] || "").trim());
+      if (isFinite(n)) out.push(n);
+    }
+  }
+  if (!out.length) out = (fallbackArr || []).slice(0);
+  out = out.filter(function (x) { return isFinite(x); }).sort(function (a, b) { return a - b; });
+  if (!out.length || out[0] > 0) out.unshift(0);
+  return out;
+}
 function clampInt_(n, lo, hi) { n = parseInt(n, 10); if (!isFinite(n)) return lo; return Math.max(lo, Math.min(hi, n)); }
 function pad2_(n) { n = Number(n); return (n < 10 ? "0" : "") + String(n); }
 function round_(x, d) { var n = Number(x); if (!isFinite(n)) return ""; var p = Math.pow(10, d); return Math.round(n * p) / p; }
