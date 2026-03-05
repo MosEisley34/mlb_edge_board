@@ -38,9 +38,20 @@ function refreshModelAndEdge_core_(cfg, mlbRes) {
   var bullpenCtx = buildBullpenUsageContext_(cfg, mlbRes);
 
   var fallbackMatchRes = null;
-  var matched = (mlbRes && mlbRes.matched && mlbRes.matched.length)
-    ? mlbRes.matched
-    : ((fallbackMatchRes = matchOddsToSchedule_(shOdds, shSched, toInt_(cfg.MATCH_TOL_MIN, 360))).matched || []);
+  var skipFallbackRematch = !!(mlbRes && toInt_(mlbRes.matchedCount, -1) === 0 && mlbRes.rejectionSummary);
+  var matched = [];
+  if (mlbRes && mlbRes.matched && mlbRes.matched.length) {
+    matched = mlbRes.matched;
+  } else if (skipFallbackRematch) {
+    matched = [];
+    log_("INFO", "Model stage skipped fallback odds/schedule rematch", {
+      reason: "schedule_stage_reported_zero_with_rejections",
+      rejectionSummary: mlbRes.rejectionSummary || {}
+    });
+  } else {
+    fallbackMatchRes = matchOddsToSchedule_(shOdds, shSched, toInt_(cfg.MATCH_TOL_MIN, 360));
+    matched = (fallbackMatchRes.matched || []);
+  }
 
   var externalFeatureCtx = loadExternalFeatureContext_(cfg, matched);
 

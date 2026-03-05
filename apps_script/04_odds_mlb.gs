@@ -256,6 +256,9 @@ function refreshMLBScheduleAndLineups_(cfg, opts) {
     lineupMin: cfg.LINEUP_MIN
   });
 
+  var shouldUseExpandedFallback = oddsRows.length <= 3;
+  var expandedFallbackUsed = false;
+
   var oddsSportKey = resolveOddsSportKey_(oddsRows, opts.sportKeyUsed || "");
   var schedMain = fetchScheduleGames_(startDate, endDate, "");
   if (!schedMain.ok) {
@@ -307,8 +310,63 @@ function refreshMLBScheduleAndLineups_(cfg, opts) {
   }
   replaceSheetBody_(shSchedule, schedRows);
 
-  var matchRes = matchOddsToSchedule_(shOdds, shSchedule, toInt_(cfg.MATCH_TOL_MIN, 360));
+  var matchTolMin = toInt_(cfg.MATCH_TOL_MIN, 360);
+  var matchRes = matchOddsToSchedule_(shOdds, shSchedule, matchTolMin);
   var matched = matchRes.matched;
+
+  if (!shouldUseExpandedFallback && matched.length === 0 && (matchRes.rejectionSummary.no_team_token_match || 0) > 0) {
+    shouldUseExpandedFallback = true;
+  }
+
+  if (shouldUseExpandedFallback) {
+    expandedFallbackUsed = true;
+    var expandedStartDate = shiftDateYmd_(startDate, -1);
+    var expandedEndDate = shiftDateYmd_(endDate, 1);
+    log_("INFO", "MLB schedule expanded-window fallback check", {
+      originalStartDate: startDate,
+      originalEndDate: endDate,
+      expandedStartDate: expandedStartDate,
+      expandedEndDate: expandedEndDate,
+      oddsUpcoming: oddsRows.length,
+      firstPassMatched: matched.length,
+      firstPassRejectionSummary: matchRes.rejectionSummary
+    });
+    var schedExpanded = fetchScheduleGames_(expandedStartDate, expandedEndDate, "");
+    if (schedExpanded.ok) {
+      var expandedRows = [];
+      for (var ex = 0; ex < schedExpanded.games.length; ex++) {
+        var eg = schedExpanded.games[ex];
+        expandedRows.push([
+          String(eg.gamePk || ""),
+          String(eg.gameGuid || ""),
+          String(eg.gameDate || ""),
+          getTeamNameSafe_(eg, "away"),
+          getTeamNameSafe_(eg, "home"),
+          getTeamIdSafe_(eg, "away"),
+          getTeamIdSafe_(eg, "home"),
+          getProbablePitcherNameSafe_(eg, "away"),
+          getProbablePitcherNameSafe_(eg, "home"),
+          String(eg.status && eg.status.detailedState ? eg.status.detailedState : ""),
+          String(eg.venue && eg.venue.name ? eg.venue.name : ""),
+          nowLocal
+        ]);
+      }
+      var shSchedExpanded = ss.insertSheet("__mlb_sched_expanded_tmp__" + String(new Date().getTime()));
+      try {
+        replaceSheetBody_(shSchedExpanded, expandedRows);
+        var expandedMatchRes = matchOddsToSchedule_(shOdds, shSchedExpanded, matchTolMin);
+        if (expandedMatchRes.matched.length > 0 || matched.length === 0) {
+          matchRes = expandedMatchRes;
+          matched = expandedMatchRes.matched;
+          games = schedExpanded.games;
+          schedRows = expandedRows;
+          replaceSheetBody_(shSchedule, schedRows);
+        }
+      } finally {
+        ss.deleteSheet(shSchedExpanded);
+      }
+    }
+  }
 
   var lineupRows = [];
   for (var m = 0; m < matched.length; m++) {
@@ -334,6 +392,7 @@ function refreshMLBScheduleAndLineups_(cfg, opts) {
     matchedCount: matched.length,
     lineupRows: lineupRows.length,
     scheduleGameType: usedGameType,
+    expandedWindowFallbackUsed: expandedFallbackUsed,
     rejectionSummary: matchRes.rejectionSummary
   });
   return {
@@ -341,8 +400,15 @@ function refreshMLBScheduleAndLineups_(cfg, opts) {
     matchedCount: matched.length,
     lineupRows: lineupRows.length,
     matched: matched,
-    rejectionSummary: matchRes.rejectionSummary
+    rejectionSummary: matchRes.rejectionSummary,
+    expandedWindowFallbackUsed: expandedFallbackUsed
   };
+}
+
+function shiftDateYmd_(dateYmd, deltaDays) {
+  var t = Date.parse(String(dateYmd || "") + "T00:00:00Z");
+  if (!isFinite(t)) return String(dateYmd || "");
+  return Utilities.formatDate(new Date(t + (toInt_(deltaDays, 0) * 24 * 3600 * 1000)), "UTC", "yyyy-MM-dd");
 }
 
 function fetchScheduleGames_(startDate, endDate, gameType) {
