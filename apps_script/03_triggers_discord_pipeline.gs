@@ -86,8 +86,10 @@ function sendDiscordWebhook_(webhook, payloadObj) {
 
 function sendDiscordBotMessage_(botCfg, payloadObj) {
   var endpoint = "https://discord.com/api/v10/channels/" + encodeURIComponent(botCfg.channelId) + "/messages";
+  var operation = "post_message";
   var maxAttempts = 3;
   var attemptCount = 0;
+  var cumulativeWaitMs = 0;
   var finalResp = null;
   var finalBody = "";
   var finalHttp = 0;
@@ -106,11 +108,17 @@ function sendDiscordBotMessage_(botCfg, payloadObj) {
     finalBody = body;
     finalHttp = http;
 
-    var retryMeta = discordRetryMeta_(http, body);
+    var retryMeta = discordRetryMeta_(http, body, {
+      attempt: attempt,
+      operation: operation,
+      defaultMaxAttempts: 3
+    });
+    maxAttempts = Math.max(maxAttempts, retryMeta.maxAttempts);
     if (attempt >= maxAttempts || !retryMeta.retry) break;
 
     log_("WARN", "Discord bot send retry scheduled", {
       deliveryMode: "bot_channel",
+      operation: operation,
       attempt: attempt,
       maxAttempts: maxAttempts,
       http: http,
@@ -118,7 +126,27 @@ function sendDiscordBotMessage_(botCfg, payloadObj) {
       retryAfterMs: retryMeta.retryAfterMs,
       body: String(body || "").slice(0, 300)
     });
+    cumulativeWaitMs += retryMeta.retryAfterMs;
     Utilities.sleep(retryMeta.retryAfterMs);
+  }
+
+  var finalMeta = discordRetryMeta_(finalHttp, finalBody, {
+    attempt: attemptCount,
+    operation: operation,
+    defaultMaxAttempts: 3
+  });
+  if (finalMeta.retry && attemptCount >= maxAttempts) {
+    log_("ERROR", "Discord bot send retries exhausted", {
+      deliveryMode: "bot_channel",
+      operation: operation,
+      endpoint: endpoint,
+      totalAttempts: attemptCount,
+      maxAttempts: maxAttempts,
+      cumulativeWaitMs: cumulativeWaitMs,
+      http: finalHttp,
+      discordCode: finalMeta.discordCode,
+      body: String(finalBody || "").slice(0, 300)
+    });
   }
 
   return {
@@ -129,11 +157,16 @@ function sendDiscordBotMessage_(botCfg, payloadObj) {
   };
 }
 
-function discordRetryMeta_(http, bodyText) {
+function discordRetryMeta_(http, bodyText, ctx) {
+  var context = ctx || {};
+  var attempt = Math.max(1, toInt_(context.attempt, 1));
+  var operation = String(context.operation || "unknown");
+  var defaultMaxAttempts = Math.max(1, toInt_(context.defaultMaxAttempts, 3));
   var body = String(bodyText || "");
   var parsed = null;
   var discordCode = "";
   var retryAfterMs = 0;
+  var maxAttempts = defaultMaxAttempts;
 
   try { parsed = JSON.parse(body); } catch (e) { parsed = null; }
   if (parsed && parsed.code !== undefined && parsed.code !== null) discordCode = String(parsed.code);
@@ -149,16 +182,27 @@ function discordRetryMeta_(http, bodyText) {
   if (http >= 500 && http <= 599) retry = true;
   if (http === 429) retry = true;
   if (http === 403 && discordCode === "40333") retry = true;
+  if (http === 403 && discordCode === "40333") maxAttempts = Math.max(maxAttempts, 5);
 
   if (retryAfterMs <= 0) {
     if (http === 429) retryAfterMs = 1200;
     else if (http >= 500) retryAfterMs = 1000;
-    else if (http === 403 && discordCode === "40333") retryAfterMs = 900;
+    else if (http === 403 && discordCode === "40333") {
+      var baseDelayMs = Math.round(900 * Math.pow(1.6, attempt - 1));
+      var jitterMs = Math.floor(Math.random() * 240) - 120;
+      retryAfterMs = baseDelayMs + jitterMs;
+    }
     else retryAfterMs = 800;
   }
 
   retryAfterMs = Math.max(200, Math.min(5000, retryAfterMs));
-  return { retry: retry, retryAfterMs: retryAfterMs, discordCode: discordCode };
+  return {
+    retry: retry,
+    retryAfterMs: retryAfterMs,
+    discordCode: discordCode,
+    maxAttempts: maxAttempts,
+    operation: operation
+  };
 }
 
 function discordBotRequest_(botCfg, method, endpoint, payloadObj) {
