@@ -61,6 +61,8 @@ function ensureSettings_(sh) {
     ["DEFAULT_PITCHER_SIERA", "4.20", "Fallback SIERA"],
     ["MODEL_K_OPS", "6.0", "Logit weight for OPS diff"],
     ["MODEL_K_PIT", "3.0", "Logit weight for pitcher factor diff"],
+    ["BULLPEN_USAGE_DAYS", "4", "Recent days of bullpen logs (recommended 3-5)"],
+    ["MODEL_BULLPEN_SHARE", "0.42", "Share of run-prevention input allocated to bullpen"],
     ["REQUIRE_PITCHER_MATCH", "false", "true/false"],
     ["NOTIFY_MAX_ODDS_AGE_MIN", "45", "Only notify if odds updated within X minutes"],
     ["NOTIFY_COOLDOWN_MIN", "60", "Minimum minutes between Discord sends for the same odds_game_id"],
@@ -169,6 +171,8 @@ function getConfig_() {
   cfg.DEFAULT_PITCHER_SIERA = toFloat_(cfg.DEFAULT_PITCHER_SIERA, 4.20);
   cfg.MODEL_K_OPS = toFloat_(cfg.MODEL_K_OPS, 6.0);
   cfg.MODEL_K_PIT = toFloat_(cfg.MODEL_K_PIT, 3.0);
+  cfg.BULLPEN_USAGE_DAYS = toInt_(cfg.BULLPEN_USAGE_DAYS, 4);
+  cfg.MODEL_BULLPEN_SHARE = toFloat_(cfg.MODEL_BULLPEN_SHARE, 0.42);
   cfg.REQUIRE_PITCHER_MATCH = String(cfg.REQUIRE_PITCHER_MATCH || "false").toLowerCase() === "true";
   cfg.NOTIFY_MAX_ODDS_AGE_MIN = toFloat_(cfg.NOTIFY_MAX_ODDS_AGE_MIN, 45);
   cfg.NOTIFY_COOLDOWN_MIN = toFloat_(cfg.NOTIFY_COOLDOWN_MIN, 60);

@@ -35,6 +35,7 @@ function refreshModelAndEdge_core_(cfg, mlbRes) {
   var opsMapObj = buildOPSMap_(shHit);
   var sieraMapObj = buildSIERAMap_(shPit);
   var opsLeagueAvg = opsMapObj.leagueAvgOps || defaultOPS;
+  var bullpenCtx = buildBullpenUsageContext_(cfg, mlbRes);
 
   var fallbackMatchRes = null;
   var matched = (mlbRes && mlbRes.matched && mlbRes.matched.length)
@@ -85,6 +86,7 @@ function refreshModelAndEdge_core_(cfg, mlbRes) {
           away_hitters_matched: awayLu.length, home_hitters_matched: homeLu.length,
           min_hitters_matched: Math.min(awayLu.length, homeLu.length),
           away_pitcher_name: "", home_pitcher_name: "", away_pitcher_matched: "", home_pitcher_matched: "",
+          bullpenAvailAway: "", bullpenAvailHome: "", bullpenAdjDelta: "",
           confidence: "", bet_side: "", bet_tier: "", bet_edge: "", units: "",
           notes: "WAIT_LINEUPS", updated_at_local: isoLocalWithOffset_(new Date())
         }));
@@ -124,6 +126,7 @@ function refreshModelAndEdge_core_(cfg, mlbRes) {
         min_hitters_matched: Math.min(awayOPS.matched, homeOPS.matched),
         away_pitcher_name: awayP, home_pitcher_name: homeP,
         away_pitcher_matched: awaySI.matched ? "Y" : "N", home_pitcher_matched: homeSI.matched ? "Y" : "N",
+        bullpenAvailAway: "", bullpenAvailHome: "", bullpenAdjDelta: "",
         confidence: "", bet_side: "", bet_tier: "", bet_edge: "", units: "",
         notes: "WAIT_PITCHERS", updated_at_local: isoLocalWithOffset_(new Date())
       }));
@@ -132,7 +135,13 @@ function refreshModelAndEdge_core_(cfg, mlbRes) {
 
     var awayPitFactor = clamp_(0.10, 0.60, 1 / awaySI.siera);
     var homePitFactor = clamp_(0.10, 0.60, 1 / homeSI.siera);
-    var x = kOps * (awayOPS.ops - homeOPS.ops) + kPit * (awayPitFactor - homePitFactor);
+    var awayBp = teamBullpenFactor_(awayTeam, sieraMapObj.map, defaultSIERA, bullpenCtx);
+    var homeBp = teamBullpenFactor_(homeTeam, sieraMapObj.map, defaultSIERA, bullpenCtx);
+    var bullpenShare = clamp_(0.15, 0.70, toFloat_(cfg.MODEL_BULLPEN_SHARE, 0.42));
+    var awayRunPrev = ((1 - bullpenShare) * awayPitFactor) + (bullpenShare * awayBp.factorAdj);
+    var homeRunPrev = ((1 - bullpenShare) * homePitFactor) + (bullpenShare * homeBp.factorAdj);
+    var bullpenAdjDelta = awayBp.factorAdj - homeBp.factorAdj;
+    var x = kOps * (awayOPS.ops - homeOPS.ops) + kPit * (awayRunPrev - homeRunPrev);
     var pAway = clamp_(0.05, 0.95, 1 / (1 + Math.exp(-x)));
     var pHome = 1 - pAway;
 
@@ -204,6 +213,9 @@ function refreshModelAndEdge_core_(cfg, mlbRes) {
       min_hitters_matched: Math.min(awayOPS.matched, homeOPS.matched),
       away_pitcher_name: awayP, home_pitcher_name: homeP,
       away_pitcher_matched: awaySI.matched ? "Y" : "N", home_pitcher_matched: homeSI.matched ? "Y" : "N",
+      bullpenAvailAway: awayBp.availability,
+      bullpenAvailHome: homeBp.availability,
+      bullpenAdjDelta: bullpenAdjDelta,
       confidence: conf, bet_side: bet.side || "", bet_tier: bet.tier || "", bet_edge: bet.side ? bet.edge : "",
       units: units, notes: notes || bet.notes || "", updated_at_local: isoLocalWithOffset_(new Date())
     }));
@@ -227,7 +239,9 @@ function refreshModelAndEdge_core_(cfg, mlbRes) {
     lineupCoverageUnweighted: totalLineupSlots > 0 ? (totalMatchedSlots / totalLineupSlots) : 0,
     lineupCoverageWeighted: totalLineupWeight > 0 ? (totalMatchedWeight / totalLineupWeight) : 0,
     lineupCoverageSlots: totalMatchedSlots + "/" + totalLineupSlots,
-    lineupCoverageWeight: totalMatchedWeight + "/" + totalLineupWeight
+    lineupCoverageWeight: totalMatchedWeight + "/" + totalLineupWeight,
+    bullpenWindowDays: bullpenCtx.windowDays,
+    bullpenTeamsTracked: bullpenCtx.teamCount
   });
 
   return {
@@ -377,6 +391,201 @@ function pitcherSIERA_(pitcherName, sieraMap, fallbackSIERA) {
   var v = sieraMap[normName_(nm)];
   if (v !== undefined && isFinite(v) && v > 0) return { siera: Number(v), matched: true };
   return { siera: fallbackSIERA, matched: false };
+}
+
+function buildBullpenUsageContext_(cfg, mlbRes) {
+  var windowDays = clamp_(3, 5, toInt_(cfg.BULLPEN_USAGE_DAYS, 4));
+  var teams = [];
+  var seen = {};
+  var matched = (mlbRes && mlbRes.matched && mlbRes.matched.length) ? mlbRes.matched : [];
+
+  for (var i = 0; i < matched.length; i++) {
+    var away = String(matched[i].away_team || "").trim();
+    var home = String(matched[i].home_team || "").trim();
+    if (away && !seen[normalizeTeam_(away)]) { seen[normalizeTeam_(away)] = true; teams.push(away); }
+    if (home && !seen[normalizeTeam_(home)]) { seen[normalizeTeam_(home)] = true; teams.push(home); }
+  }
+
+  if (!teams.length) {
+    return { windowDays: windowDays, byTeam: {}, byPitcherTeam: {}, teamCount: 0 };
+  }
+
+  var cache = CacheService.getScriptCache();
+  var keySeed = teams.map(function (t) { return normalizeTeam_(t); }).sort().join("|");
+  var cacheKey = "BULLPEN_USAGE_V1|" + windowDays + "|" + keySeed.slice(0, 220);
+  var cached = cache.get(cacheKey);
+  if (cached) {
+    try {
+      var parsed = JSON.parse(cached);
+      parsed.windowDays = windowDays;
+      parsed.teamCount = Object.keys(parsed.byTeam || {}).length;
+      return parsed;
+    } catch (e) { }
+  }
+
+  var usage = fetchRecentBullpenUsage_(windowDays, teams);
+  usage.windowDays = windowDays;
+  usage.teamCount = Object.keys(usage.byTeam || {}).length;
+  cache.put(cacheKey, JSON.stringify(usage), 60 * 20);
+  return usage;
+}
+
+function fetchRecentBullpenUsage_(windowDays, targetTeams) {
+  var now = new Date();
+  var endDate = Utilities.formatDate(now, "UTC", "yyyy-MM-dd");
+  var startMs = now.getTime() - (windowDays * 24 * 3600 * 1000);
+  var startDate = Utilities.formatDate(new Date(startMs), "UTC", "yyyy-MM-dd");
+  var url =
+    "https://statsapi.mlb.com/api/v1/schedule?sportId=1&startDate=" + encodeURIComponent(startDate) +
+    "&endDate=" + encodeURIComponent(endDate);
+
+  var resp = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
+  if (resp.getResponseCode() !== 200) {
+    log_("WARN", "Bullpen usage schedule fetch failed", { http: resp.getResponseCode(), startDate: startDate, endDate: endDate });
+    return { byTeam: {}, byPitcherTeam: {} };
+  }
+
+  var payload = JSON.parse(resp.getContentText() || "{}");
+  var dates = payload.dates || [];
+  var games = [];
+  for (var d = 0; d < dates.length; d++) {
+    var dg = dates[d] && dates[d].games ? dates[d].games : [];
+    for (var g = 0; g < dg.length; g++) games.push(dg[g]);
+  }
+
+  var target = {};
+  for (var t = 0; t < targetTeams.length; t++) target[normalizeTeam_(targetTeams[t])] = true;
+
+  var byTeamPitcher = {};
+  for (var i = 0; i < games.length; i++) {
+    var game = games[i] || {};
+    var awayTeam = getTeamNameSafe_(game, "away");
+    var homeTeam = getTeamNameSafe_(game, "home");
+    if (!target[normalizeTeam_(awayTeam)] && !target[normalizeTeam_(homeTeam)]) continue;
+
+    var gamePk = String(game.gamePk || "");
+    if (!gamePk) continue;
+    var gameDate = String(game.gameDate || "");
+    var gameTs = Date.parse(gameDate);
+    var daysAgo = isFinite(gameTs) ? Math.max(0, Math.floor((now.getTime() - gameTs) / (24 * 3600 * 1000))) : windowDays;
+
+    var boxUrl = "https://statsapi.mlb.com/api/v1/game/" + encodeURIComponent(gamePk) + "/boxscore";
+    var boxResp = UrlFetchApp.fetch(boxUrl, { muteHttpExceptions: true });
+    if (boxResp.getResponseCode() !== 200) continue;
+
+    var box = JSON.parse(boxResp.getContentText() || "{}");
+    accumulateRelieverUsage_(box, "away", daysAgo, byTeamPitcher);
+    accumulateRelieverUsage_(box, "home", daysAgo, byTeamPitcher);
+  }
+
+  var byTeam = {};
+  var byPitcherTeam = {};
+  for (var teamKey in byTeamPitcher) {
+    var pMap = byTeamPitcher[teamKey] || {};
+    var relievers = [];
+    var sumAvail = 0;
+    var cntAvail = 0;
+    for (var pid in pMap) {
+      var usage = pMap[pid];
+      usage.availability = calcRelieverAvailability_(usage);
+      relievers.push(usage);
+      sumAvail += usage.availability;
+      cntAvail++;
+      byPitcherTeam[teamKey + "|" + pid] = usage;
+    }
+    byTeam[teamKey] = {
+      relievers: relievers,
+      availability: cntAvail > 0 ? (sumAvail / cntAvail) : 1.0
+    };
+  }
+
+  return { byTeam: byTeam, byPitcherTeam: byPitcherTeam };
+}
+
+function accumulateRelieverUsage_(box, side, daysAgo, byTeamPitcher) {
+  var team = box && box.teams && box.teams[side] ? box.teams[side] : null;
+  if (!team) return;
+
+  var teamName = String(team.team && team.team.name ? team.team.name : "");
+  var teamKey = normalizeTeam_(teamName);
+  if (!teamKey) return;
+  if (!byTeamPitcher[teamKey]) byTeamPitcher[teamKey] = {};
+
+  var pitchers = team.pitchers || [];
+  if (!pitchers.length) return;
+  var starterId = String(pitchers[0] || "");
+  var players = team.players || {};
+
+  for (var i = 0; i < pitchers.length; i++) {
+    var pid = String(pitchers[i] || "");
+    if (!pid || pid === starterId) continue;
+
+    var pObj = players["ID" + pid] || {};
+    var fullName = String(pObj.person && pObj.person.fullName ? pObj.person.fullName : "");
+    var pitches = Number(pObj.stats && pObj.stats.pitching ? pObj.stats.pitching.numberOfPitches : 0);
+    if (!isFinite(pitches) || pitches < 0) pitches = 0;
+
+    var key = pid || normName_(fullName);
+    if (!byTeamPitcher[teamKey][key]) {
+      byTeamPitcher[teamKey][key] = {
+        team: teamName,
+        pitcherId: pid,
+        pitcherName: fullName,
+        appearances: 0,
+        pitches: 0,
+        weightedLoad: 0,
+        minDaysAgo: 99
+      };
+    }
+
+    var u = byTeamPitcher[teamKey][key];
+    u.appearances += 1;
+    u.pitches += pitches;
+    u.minDaysAgo = Math.min(u.minDaysAgo, daysAgo);
+    u.weightedLoad += bullpenAppearanceLoad_(daysAgo, pitches);
+  }
+}
+
+function bullpenAppearanceLoad_(daysAgo, pitches) {
+  var restW = (daysAgo <= 0) ? 1.0 : ((daysAgo === 1) ? 0.75 : ((daysAgo === 2) ? 0.45 : 0.25));
+  var pitchComponent = clamp_(0.08, 0.55, (Math.min(Math.max(0, pitches), 45) / 90));
+  return restW * (0.20 + pitchComponent);
+}
+
+function calcRelieverAvailability_(usage) {
+  var restBonus = (usage.minDaysAgo >= 2) ? 0.18 : ((usage.minDaysAgo === 1) ? 0.08 : -0.18);
+  var appearancePenalty = Math.max(0, usage.appearances - 2) * 0.08;
+  var score = 1.0 + restBonus - usage.weightedLoad - appearancePenalty;
+  return clamp_(0.05, 1.15, score);
+}
+
+function teamBullpenFactor_(teamName, sieraMap, fallbackSIERA, bullpenCtx) {
+  var teamKey = normalizeTeam_(teamName);
+  var teamUsage = bullpenCtx && bullpenCtx.byTeam ? bullpenCtx.byTeam[teamKey] : null;
+  if (!teamUsage || !teamUsage.relievers || !teamUsage.relievers.length) {
+    return {
+      availability: 1.0,
+      factorAdj: clamp_(0.10, 0.60, 1 / fallbackSIERA)
+    };
+  }
+
+  var relievers = teamUsage.relievers;
+  var weighted = 0;
+  var wsum = 0;
+  for (var i = 0; i < relievers.length; i++) {
+    var rel = relievers[i];
+    var siera = sieraMap[normName_(rel.pitcherName || "")];
+    if (!isFinite(siera) || siera <= 0) siera = fallbackSIERA;
+    var rpFactor = clamp_(0.10, 0.60, 1 / siera);
+    var w = clamp_(0.05, 1.25, Number(rel.availability || 1));
+    weighted += rpFactor * w;
+    wsum += w;
+  }
+
+  return {
+    availability: teamUsage.availability,
+    factorAdj: (wsum > 0) ? (weighted / wsum) : clamp_(0.10, 0.60, 1 / fallbackSIERA)
+  };
 }
 
 function implied_(decOdds, fallbackImp) {

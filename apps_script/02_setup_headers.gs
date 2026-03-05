@@ -128,6 +128,7 @@ function ensureEdgeHeader_(sh) {
     "model_p_away","model_p_home","edge_away","edge_home",
     "away_hitters_matched","home_hitters_matched","min_hitters_matched",
     "away_pitcher_name","home_pitcher_name","away_pitcher_matched","home_pitcher_matched",
+    "bullpenAvailAway","bullpenAvailHome","bullpenAdjDelta",
     "confidence","bet_side","bet_tier","bet_edge","units","notes","updated_at_local"
   ]);
 }
