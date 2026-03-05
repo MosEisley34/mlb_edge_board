@@ -113,9 +113,12 @@ function pickBestH2H_(bookmakers, awayTeam, homeTeam) {
         var price = Number(o.price);
         if (!isFinite(price) || price <= 1) continue;
 
-        if (normalizeTeam_(nm) === normalizeTeam_(awayTeam)) {
+        var outNorm = normalizeTeam_(nm);
+        var awayNorm = normalizeTeam_(awayTeam);
+        var homeNorm = normalizeTeam_(homeTeam);
+        if (outNorm === awayNorm) {
           if (price > bestAway) { bestAway = price; bestBookAway = bk; }
-        } else if (normalizeTeam_(nm) === normalizeTeam_(homeTeam)) {
+        } else if (outNorm === homeNorm) {
           if (price > bestHome) { bestHome = price; bestBookHome = bk; }
         }
       }
@@ -565,7 +568,10 @@ function matchOddsToSchedule_(shOdds, shSchedule, matchTolMin) {
         away_team: oAway,
         home_team: oHome,
         commence_time_utc: oTimeRaw,
-        normalized_tokens: { away: oAwayNorm, home: oHomeNorm },
+        team_tokens: {
+          raw: { away: oAway, home: oHome },
+          canonical: { away: oAwayNorm, home: oHomeNorm }
+        },
         candidate_schedule_rows: []
       });
       continue;
@@ -587,7 +593,11 @@ function matchOddsToSchedule_(shOdds, shSchedule, matchTolMin) {
         mlb_gamePk: sr.mlb_gamePk,
         gameDate_utc: sr.gameDate,
         away_team: sr.away_team,
-        home_team: sr.home_team
+        home_team: sr.home_team,
+        team_tokens: {
+          raw: { away: sr.away_team, home: sr.home_team },
+          canonical: { away: sAwayNorm, home: sHomeNorm }
+        }
       });
 
       var sTime = Date.parse(String(sr.gameDate || "")) || 0;
@@ -617,7 +627,10 @@ function matchOddsToSchedule_(shOdds, shSchedule, matchTolMin) {
         away_team: oAway,
         home_team: oHome,
         commence_time_utc: oTimeRaw,
-        normalized_tokens: { away: oAwayNorm, home: oHomeNorm },
+        team_tokens: {
+          raw: { away: oAway, home: oHome },
+          canonical: { away: oAwayNorm, home: oHomeNorm }
+        },
         candidate_schedule_rows: teamCandidates,
         candidates_in_tolerance_window: tolCandidates,
         match_tolerance_min: matchTolMin
