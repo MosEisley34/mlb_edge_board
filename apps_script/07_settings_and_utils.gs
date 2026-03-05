@@ -69,6 +69,27 @@ function ensureSettings_(sh) {
     ["NOTIFY_MIN_ODDS_MOVE", "0.03", "Minimum decimal odds change required to re-notify"],
     ["NOTIFY_MIN_EDGE_MOVE_PCT", "0.75", "Minimum edge change (percentage points) required to re-notify"],
 
+    ["EXT_FEATURES_ENABLE_WEATHER", "FALSE", "Enable weather external feature ingestion"],
+    ["EXT_FEATURES_ENABLE_BULLPEN", "FALSE", "Enable bullpen external feature ingestion"],
+    ["EXT_FEATURES_ENABLE_EXPERIMENTAL", "FALSE", "Master switch for experimental external features"],
+    ["EXT_FEATURES_ENABLE_MARKET", "FALSE", "Enable market-based experimental features"],
+    ["EXT_FEATURES_ENABLE_STATCAST", "FALSE", "Enable statcast-like experimental features"],
+    ["EXT_FEATURES_PROVIDER_WEATHER", "NOAA", "Weather provider selector"],
+    ["EXT_FEATURES_PROVIDER_BULLPEN", "INTERNAL", "Bullpen provider selector"],
+    ["EXT_FEATURES_PROVIDER_MARKET", "INTERNAL", "Market provider selector"],
+    ["EXT_FEATURES_PROVIDER_STATCAST", "INTERNAL", "Statcast provider selector"],
+    ["EXT_FEATURES_TTL_WEATHER_MIN", "30", "Cache freshness TTL in minutes for weather source"],
+    ["EXT_FEATURES_TTL_BULLPEN_MIN", "20", "Cache freshness TTL in minutes for bullpen source"],
+    ["EXT_FEATURES_TTL_MARKET_MIN", "15", "Cache freshness TTL in minutes for market source"],
+    ["EXT_FEATURES_TTL_STATCAST_MIN", "60", "Cache freshness TTL in minutes for statcast source"],
+    ["EXT_FEATURES_FORCE_REFRESH", "FALSE", "TRUE/FALSE to bypass external feature cache freshness"],
+    ["EXT_FEATURES_DEBUG", "FALSE", "TRUE/FALSE to emit verbose external feature diagnostics"],
+    ["EXT_FEATURE_WEIGHT_WEATHER_RUN_ENV", "0.18", "Weather adjustment weight on run-environment input"],
+    ["EXT_FEATURE_WEIGHT_BULLPEN_RUN_PREV", "0.14", "Bullpen adjustment weight on run-prevention input"],
+    ["EXT_FEATURE_WEIGHT_MARKET", "0.06", "Experimental market feature influence"],
+    ["EXT_FEATURE_WEIGHT_STATCAST", "0.05", "Experimental statcast-like feature influence"],
+    ["EXT_FEATURES_EXPERIMENTAL_FAIL_THRESHOLD", "3", "Consecutive source failures before temporary disable"],
+    ["EXT_FEATURES_EXPERIMENTAL_DISABLE_MIN", "120", "Minutes to keep experimental source disabled after breaker trips"],
     ["CALIBRATION_WINDOW_DAYS", "30", "Days of snapshots to include in calibration report"],
     ["CALIBRATION_EDGE_BUCKETS", "0,0.02,0.04,0.06,0.10", "Absolute edge bucket boundaries for calibration summaries"],
 
@@ -183,6 +204,28 @@ function getConfig_() {
   cfg.NOTIFY_MIN_EDGE_MOVE_PCT = toFloat_(cfg.NOTIFY_MIN_EDGE_MOVE_PCT, 0.75);
   cfg.CALIBRATION_WINDOW_DAYS = Math.max(7, toInt_(cfg.CALIBRATION_WINDOW_DAYS, 30));
   cfg.CALIBRATION_EDGE_BUCKETS = parseNumberList_(cfg.CALIBRATION_EDGE_BUCKETS, [0, 0.02, 0.04, 0.06, 0.10]);
+
+  cfg.EXT_FEATURES_ENABLE_WEATHER = String(cfg.EXT_FEATURES_ENABLE_WEATHER || "FALSE").toUpperCase() === "TRUE";
+  cfg.EXT_FEATURES_ENABLE_BULLPEN = String(cfg.EXT_FEATURES_ENABLE_BULLPEN || "FALSE").toUpperCase() === "TRUE";
+  cfg.EXT_FEATURES_ENABLE_EXPERIMENTAL = String(cfg.EXT_FEATURES_ENABLE_EXPERIMENTAL || "FALSE").toUpperCase() === "TRUE";
+  cfg.EXT_FEATURES_ENABLE_MARKET = String(cfg.EXT_FEATURES_ENABLE_MARKET || "FALSE").toUpperCase() === "TRUE";
+  cfg.EXT_FEATURES_ENABLE_STATCAST = String(cfg.EXT_FEATURES_ENABLE_STATCAST || "FALSE").toUpperCase() === "TRUE";
+  cfg.EXT_FEATURES_PROVIDER_WEATHER = String(cfg.EXT_FEATURES_PROVIDER_WEATHER || "NOAA").toUpperCase();
+  cfg.EXT_FEATURES_PROVIDER_BULLPEN = String(cfg.EXT_FEATURES_PROVIDER_BULLPEN || "INTERNAL").toUpperCase();
+  cfg.EXT_FEATURES_PROVIDER_MARKET = String(cfg.EXT_FEATURES_PROVIDER_MARKET || "INTERNAL").toUpperCase();
+  cfg.EXT_FEATURES_PROVIDER_STATCAST = String(cfg.EXT_FEATURES_PROVIDER_STATCAST || "INTERNAL").toUpperCase();
+  cfg.EXT_FEATURES_TTL_WEATHER_MIN = Math.max(5, toInt_(cfg.EXT_FEATURES_TTL_WEATHER_MIN, 30));
+  cfg.EXT_FEATURES_TTL_BULLPEN_MIN = Math.max(5, toInt_(cfg.EXT_FEATURES_TTL_BULLPEN_MIN, 20));
+  cfg.EXT_FEATURES_TTL_MARKET_MIN = Math.max(5, toInt_(cfg.EXT_FEATURES_TTL_MARKET_MIN, 15));
+  cfg.EXT_FEATURES_TTL_STATCAST_MIN = Math.max(5, toInt_(cfg.EXT_FEATURES_TTL_STATCAST_MIN, 60));
+  cfg.EXT_FEATURES_FORCE_REFRESH = String(cfg.EXT_FEATURES_FORCE_REFRESH || "FALSE").toUpperCase() === "TRUE";
+  cfg.EXT_FEATURES_DEBUG = String(cfg.EXT_FEATURES_DEBUG || "FALSE").toUpperCase() === "TRUE";
+  cfg.EXT_FEATURE_WEIGHT_WEATHER_RUN_ENV = Math.max(0, Math.min(0.35, toFloat_(cfg.EXT_FEATURE_WEIGHT_WEATHER_RUN_ENV, 0.18)));
+  cfg.EXT_FEATURE_WEIGHT_BULLPEN_RUN_PREV = Math.max(0, Math.min(0.35, toFloat_(cfg.EXT_FEATURE_WEIGHT_BULLPEN_RUN_PREV, 0.14)));
+  cfg.EXT_FEATURE_WEIGHT_MARKET = Math.max(0, Math.min(0.20, toFloat_(cfg.EXT_FEATURE_WEIGHT_MARKET, 0.06)));
+  cfg.EXT_FEATURE_WEIGHT_STATCAST = Math.max(0, Math.min(0.20, toFloat_(cfg.EXT_FEATURE_WEIGHT_STATCAST, 0.05)));
+  cfg.EXT_FEATURES_EXPERIMENTAL_FAIL_THRESHOLD = Math.max(1, toInt_(cfg.EXT_FEATURES_EXPERIMENTAL_FAIL_THRESHOLD, 3));
+  cfg.EXT_FEATURES_EXPERIMENTAL_DISABLE_MIN = Math.max(15, toInt_(cfg.EXT_FEATURES_EXPERIMENTAL_DISABLE_MIN, 120));
 
   return cfg;
 }

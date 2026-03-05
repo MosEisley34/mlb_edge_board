@@ -1,6 +1,6 @@
 /* ===================== CALIBRATION SNAPSHOTS + REPORT ===================== */
 
-function persistCalibrationSnapshots_(cfg, edgeRows, schedByPk) {
+function persistCalibrationSnapshots_(cfg, edgeRows, schedByPk, externalFeatureCtx) {
   var ss = SpreadsheetApp.getActive();
   var sh = ss.getSheetByName(SH.CALIBRATION_SNAPSHOTS);
   if (!sh) return { upserted: 0 };
@@ -74,6 +74,10 @@ function persistCalibrationSnapshots_(cfg, edgeRows, schedByPk) {
       home_odds_decimal: Number(row.home_odds_decimal),
       units_suggested: Number(row.units),
       notes: String(row.notes || ""),
+      feature_set: String(row.featureSet || "BASELINE"),
+      weather_applied: String(row.weatherApplied || "N"),
+      bullpen_applied: String(row.bullpenFeatureApplied || "N"),
+      experimental_applied: String(row.experimentalApplied || "N"),
       result: "",
       pnl_units: "",
       resolved_at_local: "",
@@ -161,15 +165,20 @@ function computeCalibrationReport_(cfg) {
   var metrics = {
     byTier: bucketMetrics_(resolved, function (r) { return String(r.bet_tier || "UNTIERED") || "UNTIERED"; }),
     byEdgeBucket: bucketMetrics_(resolved, function (r) { return edgeBucketLabel_(Math.abs(Number(r.bet_edge || 0)), edgeCuts); }),
+    byConfidenceBucket: bucketMetrics_(resolved, function (r) { return confidenceBucketLabel_(Number(r.confidence || 0)); }),
+    byFeatureSet: bucketMetrics_(resolved, function (r) { return String(r.feature_set || "BASELINE").toUpperCase(); }),
     byTeam: bucketMetrics_(resolved, function (r) { return String(r.pick_team_id || r.pick_team || "UNKNOWN"); }),
     byHomeAway: bucketMetrics_(resolved, function (r) { return String(r.pick_home_away || "UNKNOWN"); })
   };
 
   var overall = aggregateMetrics_(resolved);
   var suggestions = calibrationSuggestions_(overall, metrics.byEdgeBucket, cfg);
+  var fsBase = metrics.byFeatureSet.BASELINE || { n: 0, roi: "" };
+  var fsEnh = metrics.byFeatureSet.ENHANCED || { n: 0, roi: "" };
   var summary = "Calibration " + windowDays + "d: resolved=" + resolved.length + " pending=" + pendingCount +
     " brier(model=" + round_(overall.brierModel, 4) + ", market=" + round_(overall.brierMarket, 4) +
-    ") roi=" + round_(overall.roi, 3) + " bias=" + round_(overall.biasModel, 3);
+    ") roi=" + round_(overall.roi, 3) + " bias=" + round_(overall.biasModel, 3) +
+    " featureSet(base_n=" + fsBase.n + ", base_roi=" + round_(fsBase.roi, 3) + ", enh_n=" + fsEnh.n + ", enh_roi=" + round_(fsEnh.roi, 3) + ")";
 
   var shReport = ss.getSheetByName(SH.CALIBRATION_REPORT);
   if (shReport) {
@@ -276,6 +285,17 @@ function edgeBucketLabel_(edgeAbs, cuts) {
     if (edgeAbs >= c[i] && edgeAbs < c[i + 1]) return "[" + c[i] + "," + c[i + 1] + ")";
   }
   return ">=" + c[c.length - 1];
+}
+
+
+function confidenceBucketLabel_(confidence) {
+  var c = Number(confidence || 0);
+  if (!isFinite(c)) return "unknown";
+  if (c < 55) return "<55";
+  if (c < 60) return "55-59";
+  if (c < 65) return "60-64";
+  if (c < 70) return "65-69";
+  return "70+";
 }
 
 function rowObjectToHeader_(obj, header) {
