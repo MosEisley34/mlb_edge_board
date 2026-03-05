@@ -311,14 +311,11 @@ function discordPreflightAlertMessage_(preflight, heading) {
 function discordDeliveryMode_(cfg, opts) {
   var options = opts || {};
   var allowWebhook = (options.allowWebhook !== false);
-  var botCfg = getDiscordBotConfig_(cfg);
-  if (botCfg.token && botCfg.channelId) return { mode: "bot_channel", botCfg: botCfg, webhook: "" };
-
   var webhook = getDiscordWebhook_(cfg);
-  if (allowWebhook && webhook) return { mode: "webhook", botCfg: null, webhook: webhook };
 
+  if (allowWebhook && webhook) return { mode: "webhook", botCfg: null, webhook: webhook };
   if (allowWebhook) return { mode: "missing", botCfg: null, webhook: "" };
-  return { mode: "missing_bot", botCfg: null, webhook: webhook || "" };
+  return { mode: "missing", botCfg: null, webhook: "" };
 }
 
 function sendDiscordByMode_(deliveryMode, payloadObj) {
@@ -334,7 +331,7 @@ function sendDiscordTestPing() {
 
   if (deliveryMode.mode === "missing") {
     log_("ERROR", "Discord test ping failed: missing delivery config", {});
-    ui.alert("Discord test ping failed.\n\nSet DISCORD_WEBHOOK or DISCORD_BOT_TOKEN + DISCORD_CHANNEL_ID in SETTINGS and try again.");
+    ui.alert("Discord test ping failed.\n\nSet DISCORD_WEBHOOK in SETTINGS and try again.");
     return;
   }
 
