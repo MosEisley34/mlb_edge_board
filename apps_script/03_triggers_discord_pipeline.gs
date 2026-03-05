@@ -5,7 +5,11 @@ function installTriggers() {
   var cfg = getConfig_();
 
   var pipeMins = Math.max(5, toInt_(cfg.PIPELINE_MINUTES, 15));
-  ScriptApp.newTrigger("runPipeline").timeBased().everyMinutes(pipeMins).create();
+  ensurePipelineTriggerCadence_(pipeMins, "install", {});
+
+  var props = PropertiesService.getScriptProperties();
+  props.setProperty(PROP.PIPELINE_ZERO_STREAK, "0");
+  props.setProperty(PROP.PIPELINE_CADENCE_MODE, "NORMAL");
 
   ScriptApp.newTrigger("refreshProjectionsScheduled").timeBased().everyDays(1).atHour(6).nearMinute(5).create();
   ScriptApp.newTrigger("refreshProjectionsScheduled").timeBased().everyDays(1).atHour(11).nearMinute(5).create();
@@ -550,6 +554,96 @@ function sendDiscordHeartbeat() {
 
 /* ===================== PIPELINE ===================== */
 
+function ensurePipelineTriggerCadence_(minutes, reason, detailObj) {
+  var targetMins = Math.max(5, toInt_(minutes, 15));
+  var all = ScriptApp.getProjectTriggers();
+  var removed = 0;
+  for (var i = 0; i < all.length; i++) {
+    if (all[i].getHandlerFunction() === "runPipeline") {
+      ScriptApp.deleteTrigger(all[i]);
+      removed++;
+    }
+  }
+  ScriptApp.newTrigger("runPipeline").timeBased().everyMinutes(targetMins).create();
+
+  var props = PropertiesService.getScriptProperties();
+  props.setProperty(PROP.PIPELINE_CADENCE_MINUTES, String(targetMins));
+
+  var detail = detailObj || {};
+  detail.reason = String(reason || "unspecified");
+  detail.removedTriggers = removed;
+  detail.pipelineCadenceMinutes = targetMins;
+  log_("INFO", "Pipeline trigger cadence updated", detail);
+}
+
+function updatePipelineCadenceState_(cfg, props, matchedCount, computedCount) {
+  var matched = Math.max(0, toInt_(matchedCount, 0));
+  var computed = Math.max(0, toInt_(computedCount, 0));
+  var zeroDataRun = (matched === 0 || computed === 0);
+
+  var streak = Math.max(0, toInt_(props.getProperty(PROP.PIPELINE_ZERO_STREAK), 0));
+  streak = zeroDataRun ? (streak + 1) : 0;
+  props.setProperty(PROP.PIPELINE_ZERO_STREAK, String(streak));
+
+  var baseMins = Math.max(5, toInt_(cfg.PIPELINE_MINUTES, 15));
+  var level1Threshold = Math.max(1, toInt_(cfg.PIPELINE_DEGRADE_ZERO_STREAK_THRESHOLD, 3));
+  var level2Threshold = Math.max(level1Threshold, toInt_(cfg.PIPELINE_DEGRADE_LEVEL2_THRESHOLD, 6));
+  var level1Mins = Math.max(baseMins, toInt_(cfg.PIPELINE_DEGRADE_MINUTES_L1, 30));
+  var level2Mins = Math.max(level1Mins, toInt_(cfg.PIPELINE_DEGRADE_MINUTES_L2, 60));
+
+  var desiredMode = "NORMAL";
+  var desiredMinutes = baseMins;
+  if (streak >= level2Threshold) {
+    desiredMode = "DEGRADED_L2";
+    desiredMinutes = level2Mins;
+  } else if (streak >= level1Threshold) {
+    desiredMode = "DEGRADED_L1";
+    desiredMinutes = level1Mins;
+  }
+
+  var prevMode = String(props.getProperty(PROP.PIPELINE_CADENCE_MODE) || "NORMAL");
+  var prevMinutes = Math.max(5, toInt_(props.getProperty(PROP.PIPELINE_CADENCE_MINUTES), baseMins));
+
+  if (prevMode !== desiredMode || prevMinutes !== desiredMinutes) {
+    ensurePipelineTriggerCadence_(desiredMinutes, "auto_degrade", {
+      previousMode: prevMode,
+      newMode: desiredMode,
+      zeroDataRun: zeroDataRun,
+      zeroStreak: streak,
+      matched: matched,
+      computed: computed
+    });
+  }
+
+  props.setProperty(PROP.PIPELINE_CADENCE_MODE, desiredMode);
+
+  if (desiredMode !== "NORMAL") {
+    log_("WARN", "Pipeline degraded cadence active", {
+      mode: desiredMode,
+      cadenceMinutes: desiredMinutes,
+      zeroStreak: streak,
+      thresholds: { level1: level1Threshold, level2: level2Threshold },
+      matched: matched,
+      computed: computed
+    });
+  } else if (prevMode !== "NORMAL") {
+    log_("INFO", "Pipeline cadence recovered to normal", {
+      previousMode: prevMode,
+      cadenceMinutes: desiredMinutes,
+      zeroStreak: streak,
+      matched: matched,
+      computed: computed
+    });
+  }
+
+  return {
+    mode: desiredMode,
+    cadenceMinutes: desiredMinutes,
+    zeroStreak: streak,
+    zeroDataRun: zeroDataRun
+  };
+}
+
 function runPipeline() {
   var lock = LockService.getScriptLock();
   if (!lock.tryLock(25000)) { log_("WARN", "Pipeline skipped (lock busy)", {}); return; }
@@ -626,15 +720,16 @@ function runPipeline() {
     var mlbRes = refreshMLBScheduleAndLineups_(cfg, { sportKeyUsed: oddsRes.sportKeyUsed });
     refreshProjectionsIfStale_(cfg, false);
     var modelRes = refreshModelAndEdge_(cfg, mlbRes);
+    var cadenceState = updatePipelineCadenceState_(cfg, props, mlbRes.matchedCount, modelRes.computed);
 
     var rejectionSummaryText = JSON.stringify(mlbRes.rejectionSummary || {});
-    var summary = "odds=" + oddsRes.games + " matched=" + mlbRes.matchedCount + " computed=" + modelRes.computed + " bets=" + modelRes.betSignalsFound + " lineupFallbackUsed=" + (modelRes.lineupFallbackUsed ? "Y" : "N") + " lineupFallbackGames=" + (modelRes.lineupFallbackGames || 0) + " rejects=" + rejectionSummaryText;
+    var summary = "odds=" + oddsRes.games + " matched=" + mlbRes.matchedCount + " computed=" + modelRes.computed + " bets=" + modelRes.betSignalsFound + " cadenceMode=" + cadenceState.mode + " cadenceMin=" + cadenceState.cadenceMinutes + " zeroStreak=" + cadenceState.zeroStreak + " lineupFallbackUsed=" + (modelRes.lineupFallbackUsed ? "Y" : "N") + " lineupFallbackGames=" + (modelRes.lineupFallbackGames || 0) + " rejects=" + rejectionSummaryText;
 
     props.setProperty(PROP.LAST_PIPELINE_AT, startedUtc);
     props.setProperty(PROP.LAST_PIPELINE_STATUS, "OK");
     props.setProperty(PROP.LAST_PIPELINE_SUMMARY, summary);
 
-    log_("INFO", "runPipeline completed", { odds: oddsRes.games, matched: mlbRes.matchedCount, computed: modelRes.computed, betSignalsFound: modelRes.betSignalsFound, lineupFallbackMode: modelRes.lineupFallbackMode, lineupFallbackUsed: modelRes.lineupFallbackUsed, lineupFallbackGames: modelRes.lineupFallbackGames, rejectionSummary: mlbRes.rejectionSummary || {} });
+    log_("INFO", "runPipeline completed", { odds: oddsRes.games, matched: mlbRes.matchedCount, computed: modelRes.computed, betSignalsFound: modelRes.betSignalsFound, cadenceMode: cadenceState.mode, cadenceMinutes: cadenceState.cadenceMinutes, zeroStreak: cadenceState.zeroStreak, lineupFallbackMode: modelRes.lineupFallbackMode, lineupFallbackUsed: modelRes.lineupFallbackUsed, lineupFallbackGames: modelRes.lineupFallbackGames, rejectionSummary: mlbRes.rejectionSummary || {} });
   } catch (e) {
     props.setProperty(PROP.LAST_PIPELINE_AT, startedUtc);
     props.setProperty(PROP.LAST_PIPELINE_STATUS, "ERROR");
