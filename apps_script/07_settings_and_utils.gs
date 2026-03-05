@@ -36,6 +36,8 @@ function ensureSettings_(sh) {
     ["ODDS_FALLBACK_ON_EMPTY", "TRUE", "If preseason empty, try regular"],
     ["ODDS_WINDOW_PRE_FIRST_MIN", "60", "Minutes before first local game start to begin odds refresh"],
     ["ODDS_WINDOW_POST_LAST_MIN", "0", "Minutes after last local game start to continue odds refresh"],
+    ["ODDS_WINDOW_REFRESH_MIN", "5", "Minimum minutes between odds-window schedule refresh fetch attempts"],
+    ["ODDS_WINDOW_FORCE_REFRESH", "FALSE", "TRUE/FALSE to bypass cache freshness and min refresh interval"],
     ["ODDS_NO_GAMES_BEHAVIOR", "SKIP", "SKIP or FALLBACK_STATIC_WINDOW"],
 
     ["MATCH_TOL_MIN", "360", "Team+time match tolerance (minutes)"],
@@ -134,6 +136,8 @@ function getConfig_() {
   cfg.ODDS_FALLBACK_ON_EMPTY = String(cfg.ODDS_FALLBACK_ON_EMPTY || "TRUE").toUpperCase() === "TRUE";
   cfg.ODDS_WINDOW_PRE_FIRST_MIN = toInt_(cfg.ODDS_WINDOW_PRE_FIRST_MIN, 60);
   cfg.ODDS_WINDOW_POST_LAST_MIN = toInt_(cfg.ODDS_WINDOW_POST_LAST_MIN, 0);
+  cfg.ODDS_WINDOW_REFRESH_MIN = toInt_(cfg.ODDS_WINDOW_REFRESH_MIN, 5);
+  cfg.ODDS_WINDOW_FORCE_REFRESH = String(cfg.ODDS_WINDOW_FORCE_REFRESH || "FALSE").toUpperCase() === "TRUE";
   cfg.ODDS_NO_GAMES_BEHAVIOR = String(cfg.ODDS_NO_GAMES_BEHAVIOR || "SKIP").toUpperCase();
   cfg.MATCH_TOL_MIN = toInt_(cfg.MATCH_TOL_MIN, 360);
   cfg.LINEUP_MIN = toInt_(cfg.LINEUP_MIN, 9);

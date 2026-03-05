@@ -744,8 +744,51 @@ function runPipeline() {
 
 function resolveOddsWindowForPipeline_(cfg, props) {
   var cacheTtlMin = Math.max(1, toInt_(cfg.ODDS_WINDOW_CACHE_TTL_MIN, 30));
+  var refreshMin = Math.max(1, toInt_(cfg.ODDS_WINDOW_REFRESH_MIN, 5));
+  var forceRefresh = !!cfg.ODDS_WINDOW_FORCE_REFRESH;
   var nowMs = Date.now();
   var windowCacheKeyName = String(PROP.ODDS_WINDOW_CACHE || "").trim();
+  var cacheResult = readOddsWindowCache_(props, cfg, nowMs, cacheTtlMin, windowCacheKeyName);
+  var cachedWindow = cacheResult.window;
+  var hasCachedWindow = !!cachedWindow;
+  var cacheAgeMin = hasCachedWindow ? toFloat_(cacheResult.cacheAgeMin, -1) : -1;
+  var cacheFresh = hasCachedWindow && !!cacheResult.cacheFresh;
+
+  if (cacheFresh && !forceRefresh) {
+    log_("INFO", "Odds window source selected", {
+      source: "cached_schedule_fresh",
+      hasGames: !!(cachedWindow && cachedWindow.hasGames),
+      gameCount: cachedWindow ? cachedWindow.gameCount : 0,
+      cacheTtlMin: cacheTtlMin,
+      cacheAgeMin: cacheAgeMin,
+      cacheFresh: true,
+      fetchAttempted: false,
+      reason: "fresh_cache_hit"
+    });
+    return { window: cachedWindow, source: "cached_schedule_fresh", error: "" };
+  }
+
+  var shouldAttemptFetch = true;
+  var reason = forceRefresh ? "force_refresh" : "cache_expired";
+  if (!forceRefresh && hasCachedWindow && cacheAgeMin >= 0 && cacheAgeMin < refreshMin) {
+    shouldAttemptFetch = false;
+    reason = "fresh_cache_hit";
+  }
+
+  if (!shouldAttemptFetch) {
+    log_("INFO", "Odds window source selected", {
+      source: "cached_schedule_stale",
+      hasGames: !!(cachedWindow && cachedWindow.hasGames),
+      gameCount: cachedWindow ? cachedWindow.gameCount : 0,
+      cacheTtlMin: cacheTtlMin,
+      refreshMin: refreshMin,
+      cacheAgeMin: cacheAgeMin,
+      cacheFresh: cacheFresh,
+      fetchAttempted: false,
+      reason: reason
+    });
+    return { window: cachedWindow, source: "cached_schedule_stale", error: "" };
+  }
 
   try {
     var freshWindow = getMLBOddsRefreshWindow_(cfg);
@@ -754,33 +797,45 @@ function resolveOddsWindowForPipeline_(cfg, props) {
       source: "fresh_schedule",
       hasGames: !!(freshWindow && freshWindow.hasGames),
       gameCount: freshWindow ? freshWindow.gameCount : 0,
-      cacheTtlMin: cacheTtlMin
+      cacheTtlMin: cacheTtlMin,
+      cacheAgeMin: cacheAgeMin,
+      cacheFresh: cacheFresh,
+      fetchAttempted: true,
+      reason: reason
     });
     return { window: freshWindow, source: "fresh_schedule", error: "" };
   } catch (eWindow) {
     var errClass = (eWindow && eWindow.name) ? String(eWindow.name) : "Error";
     var errMsg = (eWindow && eWindow.message) ? String(eWindow.message) : String(eWindow);
-    var cacheResult = readOddsWindowCache_(props, cfg, nowMs, cacheTtlMin, windowCacheKeyName);
-    var cachedWindow = cacheResult.window;
+
     if (cachedWindow) {
       log_("WARN", "Odds window source selected", {
-        source: "cached_schedule",
+        source: "cached_schedule_stale",
         hasGames: !!(cachedWindow && cachedWindow.hasGames),
         gameCount: cachedWindow ? cachedWindow.gameCount : 0,
         cacheTtlMin: cacheTtlMin,
+        cacheAgeMin: cacheAgeMin,
+        cacheFresh: cacheFresh,
+        fetchAttempted: true,
+        reason: "fetch_error_fallback",
         configuredKeyName: windowCacheKeyName,
         sourceAttempted: cacheResult.sourceAttempted,
+        cacheStatus: cacheResult.status,
         fetchErrorClass: errClass,
         fetchErrorMessage: errMsg,
         cacheErrorClass: cacheResult.errorClass,
         cacheErrorMessage: cacheResult.errorMessage
       });
-      return { window: cachedWindow, source: "cached_schedule", error: errMsg };
+      return { window: cachedWindow, source: "cached_schedule_stale", error: errMsg };
     }
 
     log_("WARN", "Odds window source selected", {
       source: "fallback_static_window",
       cacheTtlMin: cacheTtlMin,
+      cacheAgeMin: cacheAgeMin,
+      cacheFresh: cacheFresh,
+      fetchAttempted: true,
+      reason: "fetch_error_fallback",
       configuredKeyName: windowCacheKeyName,
       sourceAttempted: cacheResult.sourceAttempted,
       cacheStatus: cacheResult.status,
@@ -886,23 +941,19 @@ function readOddsWindowCache_(props, cfg, nowMs, cacheTtlMin, keyName) {
     if (cachedAtMs <= 0) {
       return {
         window: null,
-        status: "missing_key",
+        status: "invalid",
         sourceAttempted: sourceAttempted.join("|"),
+        cacheAgeMin: -1,
+        cacheFresh: false,
         errorClass: "",
         errorMessage: ""
       };
     }
 
     var maxAgeMs = Math.max(1, cacheTtlMin) * 60 * 1000;
-    if ((nowMs - cachedAtMs) > maxAgeMs) {
-      return {
-        window: null,
-        status: "missing_key",
-        sourceAttempted: sourceAttempted.join("|"),
-        errorClass: "",
-        errorMessage: ""
-      };
-    }
+    var ageMs = Math.max(0, nowMs - cachedAtMs);
+    var ageMin = Math.round((ageMs / 60000) * 100) / 100;
+    var isFresh = ageMs <= maxAgeMs;
 
     var parsed = {
       hasGames: !!cached.hasGames,
@@ -939,8 +990,10 @@ function readOddsWindowCache_(props, cfg, nowMs, cacheTtlMin, keyName) {
 
     return {
       window: parsed,
-      status: "ok",
+      status: isFresh ? "ok" : "expired",
       sourceAttempted: sourceAttempted.join("|"),
+      cacheAgeMin: ageMin,
+      cacheFresh: isFresh,
       errorClass: "",
       errorMessage: ""
     };
