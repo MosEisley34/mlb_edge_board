@@ -10,6 +10,7 @@ function onOpen() {
     .addItem("Refresh MLB Now (Schedule + Lineups)", "refreshMLBScheduleAndLineupsOnly")
     .addItem("Refresh Projections Now (Force)", "refreshProjectionsForce")
     .addItem("Compute Model/Edge Now", "refreshModelAndEdgeOnly")
+    .addItem("Run Calibration Report Now", "runDailyCalibration")
     .addSeparator()
     .addItem("Send Discord Test Ping", "sendDiscordTestPing")
     .addItem("Send Heartbeat Now", "sendDiscordHeartbeat")

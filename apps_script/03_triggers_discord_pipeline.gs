@@ -13,6 +13,7 @@ function installTriggers() {
 
   ScriptApp.newTrigger("refreshProjectionsScheduled").timeBased().everyDays(1).atHour(6).nearMinute(5).create();
   ScriptApp.newTrigger("refreshProjectionsScheduled").timeBased().everyDays(1).atHour(11).nearMinute(5).create();
+  ScriptApp.newTrigger("runDailyCalibration").timeBased().everyDays(1).atHour(8).nearMinute(20).create();
 
   var mode = String(cfg.HEARTBEAT_MODE || "DAILY").toUpperCase();
   if (mode === "DAILY") {
@@ -26,6 +27,7 @@ function installTriggers() {
   log_("INFO", "Triggers installed", {
     pipeline: pipeMins + "m",
     projections: "06:05 + 11:05",
+    calibration: "08:20 daily",
     heartbeat_mode: mode,
     heartbeat_time: (mode === "DAILY") ? (pad2_(toInt_(cfg.HEARTBEAT_HOUR, 9)) + ":" + pad2_(toInt_(cfg.HEARTBEAT_MINUTE, 5))) : (mode === "HOURLY" ? "hourly" : "off")
   });
@@ -36,7 +38,7 @@ function removeTriggers() {
   var removed = 0;
   for (var i = 0; i < all.length; i++) {
     var fn = all[i].getHandlerFunction();
-    if (fn === "runPipeline" || fn === "refreshProjectionsScheduled" || fn === "sendDiscordHeartbeat") {
+    if (fn === "runPipeline" || fn === "refreshProjectionsScheduled" || fn === "sendDiscordHeartbeat" || fn === "runDailyCalibration") {
       ScriptApp.deleteTrigger(all[i]);
       removed++;
     }
@@ -540,6 +542,7 @@ function sendDiscordHeartbeat() {
   var lastAt = props.getProperty(PROP.LAST_PIPELINE_AT) || "";
   var lastStatus = props.getProperty(PROP.LAST_PIPELINE_STATUS) || "";
   var lastSummary = props.getProperty(PROP.LAST_PIPELINE_SUMMARY) || "";
+  var lastCalibrationSummary = props.getProperty(PROP.LAST_CALIBRATION_SUMMARY) || "";
 
   var msg =
     "🫀 **Lucky Luciano MLB — Heartbeat (" + mode + ")**\n" +
@@ -550,6 +553,7 @@ function sendDiscordHeartbeat() {
   if (lastAt) msg += "**Last pipeline (UTC):** " + lastAt + "\n";
   if (lastStatus) msg += "**Last status:** " + lastStatus + "\n";
   if (lastSummary) msg += "**Last summary:** " + lastSummary + "\n";
+  if (lastCalibrationSummary) msg += "**Calibration:** " + lastCalibrationSummary + "\n";
   msg += DISCORD_MESSAGE_DIVIDER + "\n";
   msg += "_If you see this, triggers + Discord delivery are working._";
 

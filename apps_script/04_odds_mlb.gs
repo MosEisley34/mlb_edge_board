@@ -296,6 +296,8 @@ function refreshMLBScheduleAndLineups_(cfg, opts) {
       String(gg.gameDate || ""),
       getTeamNameSafe_(gg, "away"),
       getTeamNameSafe_(gg, "home"),
+      getTeamIdSafe_(gg, "away"),
+      getTeamIdSafe_(gg, "home"),
       getProbablePitcherNameSafe_(gg, "away"),
       getProbablePitcherNameSafe_(gg, "home"),
       String(gg.status && gg.status.detailedState ? gg.status.detailedState : ""),
@@ -427,6 +429,13 @@ function getTeamNameSafe_(g, side) {
   try {
     var t = g.teams && g.teams[side] && g.teams[side].team ? g.teams[side].team : null;
     return t && t.name ? String(t.name) : "";
+  } catch (e) { return ""; }
+}
+
+function getTeamIdSafe_(g, side) {
+  try {
+    var t = g.teams && g.teams[side] && g.teams[side].team ? g.teams[side].team : null;
+    return t && t.id ? String(t.id) : "";
   } catch (e) { return ""; }
 }
 

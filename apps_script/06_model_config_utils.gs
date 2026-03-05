@@ -225,6 +225,8 @@ function refreshModelAndEdge_core_(cfg, mlbRes) {
 
   writeRowsByHeader_(shEdge, edgeRows);
 
+  var snapshotRes = persistCalibrationSnapshots_(cfg, edgeRows, schedByPk);
+
   log_("INFO", "refreshModelAndEdge completed", {
     opsLeagueAvg: opsLeagueAvg,
     matched: matched.length,
@@ -241,7 +243,8 @@ function refreshModelAndEdge_core_(cfg, mlbRes) {
     lineupCoverageSlots: totalMatchedSlots + "/" + totalLineupSlots,
     lineupCoverageWeight: totalMatchedWeight + "/" + totalLineupWeight,
     bullpenWindowDays: bullpenCtx.windowDays,
-    bullpenTeamsTracked: bullpenCtx.teamCount
+    bullpenTeamsTracked: bullpenCtx.teamCount,
+    calibrationSnapshotsUpserted: snapshotRes.upserted
   });
 
   return {
@@ -251,7 +254,8 @@ function refreshModelAndEdge_core_(cfg, mlbRes) {
     lineupFallbackUsed: lineupFallbackGames > 0,
     lineupFallbackGames: lineupFallbackGames,
     lineupCoverageUnweighted: totalLineupSlots > 0 ? (totalMatchedSlots / totalLineupSlots) : 0,
-    lineupCoverageWeighted: totalLineupWeight > 0 ? (totalMatchedWeight / totalLineupWeight) : 0
+    lineupCoverageWeighted: totalLineupWeight > 0 ? (totalMatchedWeight / totalLineupWeight) : 0,
+    calibrationSnapshotsUpserted: snapshotRes.upserted
   };
 }
 
