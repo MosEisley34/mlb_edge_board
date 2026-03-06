@@ -1,37 +1,57 @@
 /* ===================== TRIGGERS ===================== */
 
 function installTriggers() {
-  removeTriggers();
-  var cfg = getConfig_();
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(25000)) { log_("WARN", "Trigger maintenance skipped (lock busy)", { reason: "maintenance_lock_busy" }); return; }
 
-  var pipeMins = Math.max(5, toInt_(cfg.PIPELINE_MINUTES, 15));
-  ensurePipelineTriggerCadence_(pipeMins, "install", {});
+  try {
+    var cfg = getConfig_();
+    var props = PropertiesService.getScriptProperties();
+    var pipeMins = Math.max(5, toInt_(cfg.PIPELINE_MINUTES, 15));
+    var desiredState = describeDesiredTriggerState_(cfg, pipeMins);
+    var currentState = describeCurrentTriggerState_();
+    var triggersAlreadyCorrect = isTriggerInstallStateMatch_(desiredState, currentState);
 
-  var props = PropertiesService.getScriptProperties();
-  props.setProperty(PROP.PIPELINE_ZERO_STREAK, "0");
-  props.setProperty(PROP.PIPELINE_CADENCE_MODE, "NORMAL");
+    var cadenceUpdate = null;
+    if (!triggersAlreadyCorrect) {
+      removeTriggers();
+      cadenceUpdate = ensurePipelineTriggerCadence_(pipeMins, "install", { installAction: "reinstall" });
+      ScriptApp.newTrigger("refreshProjectionsScheduled").timeBased().everyDays(1).atHour(6).nearMinute(5).create();
+      ScriptApp.newTrigger("refreshProjectionsScheduled").timeBased().everyDays(1).atHour(11).nearMinute(5).create();
+      ScriptApp.newTrigger("runDailyCalibration").timeBased().everyDays(1).atHour(8).nearMinute(20).create();
 
-  ScriptApp.newTrigger("refreshProjectionsScheduled").timeBased().everyDays(1).atHour(6).nearMinute(5).create();
-  ScriptApp.newTrigger("refreshProjectionsScheduled").timeBased().everyDays(1).atHour(11).nearMinute(5).create();
-  ScriptApp.newTrigger("runDailyCalibration").timeBased().everyDays(1).atHour(8).nearMinute(20).create();
+      if (desiredState.heartbeatMode === "DAILY") {
+        ScriptApp.newTrigger("sendDiscordHeartbeat").timeBased().everyDays(1).atHour(desiredState.heartbeatHour).nearMinute(desiredState.heartbeatMinute).create();
+      } else if (desiredState.heartbeatMode === "HOURLY") {
+        ScriptApp.newTrigger("sendDiscordHeartbeat").timeBased().everyHours(1).create();
+      }
+    } else {
+      cadenceUpdate = ensurePipelineTriggerCadence_(pipeMins, "install", { installAction: "noop" });
+    }
 
-  var mode = String(cfg.HEARTBEAT_MODE || "DAILY").toUpperCase();
-  if (mode === "DAILY") {
-    var hh = clampInt_(toInt_(cfg.HEARTBEAT_HOUR, 9), 0, 23);
-    var mm = clampInt_(toInt_(cfg.HEARTBEAT_MINUTE, 5), 0, 59);
-    ScriptApp.newTrigger("sendDiscordHeartbeat").timeBased().everyDays(1).atHour(hh).nearMinute(mm).create();
-  } else if (mode === "HOURLY") {
-    ScriptApp.newTrigger("sendDiscordHeartbeat").timeBased().everyHours(1).create();
+    props.setProperty(PROP.PIPELINE_ZERO_STREAK, "0");
+    props.setProperty(PROP.PIPELINE_CADENCE_MODE, "NORMAL");
+
+    var runDecision = maybeRunPipelineAfterInstall_(cfg, cadenceUpdate);
+
+    log_("INFO", "Triggers installed", {
+      pipeline: pipeMins + "m",
+      projections: "06:05 + 11:05",
+      calibration: "08:20 daily",
+      heartbeat_mode: desiredState.heartbeatMode,
+      heartbeat_time: (desiredState.heartbeatMode === "DAILY") ? (pad2_(desiredState.heartbeatHour) + ":" + pad2_(desiredState.heartbeatMinute)) : (desiredState.heartbeatMode === "HOURLY" ? "hourly" : "off"),
+      reinstallSkipped: triggersAlreadyCorrect,
+      postInstallRunReasonCode: runDecision.reasonCode,
+      postInstallRunExecuted: !!runDecision.executed
+    });
+
+    setPipelineDebounceForMs_(props, 15000, "trigger_maintenance_completed");
+  } finally {
+    lock.releaseLock();
   }
-
-  log_("INFO", "Triggers installed", {
-    pipeline: pipeMins + "m",
-    projections: "06:05 + 11:05",
-    calibration: "08:20 daily",
-    heartbeat_mode: mode,
-    heartbeat_time: (mode === "DAILY") ? (pad2_(toInt_(cfg.HEARTBEAT_HOUR, 9)) + ":" + pad2_(toInt_(cfg.HEARTBEAT_MINUTE, 5))) : (mode === "HOURLY" ? "hourly" : "off")
-  });
 }
+
+
 
 function removeTriggers() {
   var all = ScriptApp.getProjectTriggers();
@@ -44,6 +64,141 @@ function removeTriggers() {
     }
   }
   log_("INFO", "Triggers removed", { count: removed });
+}
+
+
+function describeDesiredTriggerState_(cfg, pipelineMinutes) {
+  return {
+    pipelineMinutes: normalizePipelineTriggerCadenceMinutes_(pipelineMinutes),
+    heartbeatMode: String(cfg.HEARTBEAT_MODE || "DAILY").toUpperCase(),
+    heartbeatHour: clampInt_(toInt_(cfg.HEARTBEAT_HOUR, 9), 0, 23),
+    heartbeatMinute: clampInt_(toInt_(cfg.HEARTBEAT_MINUTE, 5), 0, 59)
+  };
+}
+
+function describeCurrentTriggerState_() {
+  var all = ScriptApp.getProjectTriggers();
+  var counts = {
+    runPipeline: 0,
+    refreshProjectionsScheduled: 0,
+    sendDiscordHeartbeat: 0,
+    runDailyCalibration: 0
+  };
+  for (var i = 0; i < all.length; i++) {
+    var fn = String(all[i].getHandlerFunction() || "");
+    if (counts[fn] !== undefined) counts[fn]++;
+  }
+  return counts;
+}
+
+function isTriggerInstallStateMatch_(desiredState, currentState) {
+  var expectedHeartbeatCount = desiredState.heartbeatMode === "OFF" ? 0 : 1;
+  return currentState.runPipeline === 1 &&
+    currentState.refreshProjectionsScheduled === 2 &&
+    currentState.runDailyCalibration === 1 &&
+    currentState.sendDiscordHeartbeat === expectedHeartbeatCount;
+}
+function registerDuplicateRunPrevented_(props, reasonCode, detailObj) {
+  var next = Math.max(0, toInt_(props.getProperty(PROP.PIPELINE_DUPLICATE_RUN_PREVENTED), 0)) + 1;
+  props.setProperty(PROP.PIPELINE_DUPLICATE_RUN_PREVENTED, String(next));
+  var detail = detailObj || {};
+  detail.reasonCode = String(reasonCode || "unspecified");
+  detail.duplicateRunPreventedCount = next;
+  log_("INFO", "Duplicate-run prevented", detail);
+  return next;
+}
+
+function pipelineDebounceState_(props, nowMs) {
+  var currentMs = Math.max(0, toInt_(nowMs, Date.now()));
+  var untilMs = Math.max(0, toInt_(props.getProperty(PROP.PIPELINE_RUN_DEBOUNCE_UNTIL_MS), 0));
+  return {
+    nowMs: currentMs,
+    nowIso: new Date(currentMs).toISOString(),
+    untilMs: untilMs,
+    untilIso: untilMs > 0 ? new Date(untilMs).toISOString() : "",
+    active: untilMs > currentMs,
+    remainingMs: Math.max(0, untilMs - currentMs)
+  };
+}
+
+function setPipelineDebounceForMs_(props, durationMs, reasonCode) {
+  var nowMs = Date.now();
+  var targetUntilMs = nowMs + Math.max(0, toInt_(durationMs, 0));
+  var existingUntilMs = Math.max(0, toInt_(props.getProperty(PROP.PIPELINE_RUN_DEBOUNCE_UNTIL_MS), 0));
+  var finalUntilMs = Math.max(targetUntilMs, existingUntilMs);
+  props.setProperty(PROP.PIPELINE_RUN_DEBOUNCE_UNTIL_MS, String(finalUntilMs));
+  log_("INFO", "Pipeline debounce updated", {
+    reasonCode: String(reasonCode || "unspecified"),
+    debounceUntil: new Date(finalUntilMs).toISOString(),
+    addedMs: Math.max(0, finalUntilMs - nowMs)
+  });
+  return finalUntilMs;
+}
+
+function maybeRunPipelineAfterInstall_(cfg, cadenceUpdate) {
+  var props = PropertiesService.getScriptProperties();
+  var nowMs = Date.now();
+  var debounce = pipelineDebounceState_(props, nowMs);
+  var decision = { executed: false, reasonCode: "SKIPPED_DEBOUNCE_ACTIVE" };
+
+  if (debounce.active) {
+    registerDuplicateRunPrevented_(props, decision.reasonCode, {
+      triggerPath: "install",
+      debounceUntil: debounce.untilIso,
+      remainingMs: debounce.remainingMs
+    });
+    log_("INFO", "Post-install immediate run skipped", {
+      reasonCode: decision.reasonCode,
+      cadenceChanged: cadenceUpdate ? !!cadenceUpdate.changed : false
+    });
+    return decision;
+  }
+
+  decision.reasonCode = (cadenceUpdate && cadenceUpdate.changed) ? "EXECUTED_INSTALL_CADENCE_CHANGED" : "EXECUTED_INSTALL_NOOP_CADENCE";
+  log_("INFO", "Post-install immediate run executing", {
+    reasonCode: decision.reasonCode,
+    cadenceChanged: cadenceUpdate ? !!cadenceUpdate.changed : false,
+    cadenceMinutes: cadenceUpdate ? cadenceUpdate.appliedCadenceMinutes : ""
+  });
+  runPipeline({ source: "install", reasonCode: decision.reasonCode, cfgOverride: cfg, skipLock: true });
+  decision.executed = true;
+  return decision;
+}
+
+function triggerSignature_(trigger) {
+  if (!trigger) return "";
+  var fn = String(trigger.getHandlerFunction ? trigger.getHandlerFunction() : "");
+  var source = String(trigger.getEventType ? trigger.getEventType() : "");
+  var unique = String(trigger.getUniqueId ? trigger.getUniqueId() : "");
+  return fn + "|" + source + "|" + unique;
+}
+
+function pipelineTriggerStateSnapshot_(allTriggers, targetMins) {
+  var desiredMins = normalizePipelineTriggerCadenceMinutes_(targetMins);
+  var list = allTriggers || ScriptApp.getProjectTriggers();
+  var pipelineTriggers = [];
+  for (var i = 0; i < list.length; i++) {
+    if (list[i].getHandlerFunction() === "runPipeline") pipelineTriggers.push(list[i]);
+  }
+
+  var props = PropertiesService.getScriptProperties();
+  var storedMins = normalizePipelineTriggerCadenceMinutes_(toInt_(props.getProperty(PROP.PIPELINE_CADENCE_MINUTES), desiredMins));
+  var storedSignature = String(props.getProperty(PROP.PIPELINE_TRIGGER_SIGNATURE) || "");
+  var expectedSignature = "runPipeline|CLOCK|everyMinutes:" + desiredMins;
+  var existing = pipelineTriggers[0] || null;
+  var actualHandlerSignature = triggerSignature_(existing);
+  var existingSignature = storedSignature || ("runPipeline|CLOCK|everyMinutes:" + storedMins);
+  var isMatch = pipelineTriggers.length === 1 && storedMins === desiredMins && (!storedSignature || storedSignature === expectedSignature);
+
+  return {
+    triggerCount: pipelineTriggers.length,
+    existingSignature: existingSignature,
+    expectedSignature: expectedSignature,
+    isMatch: isMatch,
+    candidateTriggerSignature: actualHandlerSignature,
+    storedCadenceMinutes: storedMins,
+    desiredCadenceMinutes: desiredMins
+  };
 }
 
 /* ===================== DISCORD ===================== */
@@ -572,25 +727,44 @@ function ensurePipelineTriggerCadence_(minutes, reason, detailObj) {
   var requestedMins = toInt_(minutes, 15);
   var targetMins = normalizePipelineTriggerCadenceMinutes_(requestedMins);
   var all = ScriptApp.getProjectTriggers();
+  var snapshot = pipelineTriggerStateSnapshot_(all, targetMins);
+
   var removed = 0;
-  for (var i = 0; i < all.length; i++) {
-    if (all[i].getHandlerFunction() === "runPipeline") {
-      ScriptApp.deleteTrigger(all[i]);
-      removed++;
+  var changed = !snapshot.isMatch;
+  if (changed) {
+    for (var i = 0; i < all.length; i++) {
+      if (all[i].getHandlerFunction() === "runPipeline") {
+        ScriptApp.deleteTrigger(all[i]);
+        removed++;
+      }
     }
+    ScriptApp.newTrigger("runPipeline").timeBased().everyMinutes(targetMins).create();
   }
-  ScriptApp.newTrigger("runPipeline").timeBased().everyMinutes(targetMins).create();
 
   var props = PropertiesService.getScriptProperties();
   props.setProperty(PROP.PIPELINE_CADENCE_MINUTES, String(targetMins));
+  props.setProperty(PROP.PIPELINE_TRIGGER_SIGNATURE, snapshot.expectedSignature);
 
   var detail = detailObj || {};
   detail.reason = String(reason || "unspecified");
+  detail.reinstallSkipped = !changed;
   detail.removedTriggers = removed;
+  detail.existingTriggerCount = snapshot.triggerCount;
+  detail.existingTriggerSignature = snapshot.existingSignature;
+  detail.desiredTriggerSignature = snapshot.expectedSignature;
+  detail.candidateTriggerSignature = snapshot.candidateTriggerSignature;
   detail.requestedCadenceMinutes = requestedMins;
   detail.appliedCadenceMinutes = targetMins;
   detail.pipelineCadenceMinutes = targetMins;
   log_("INFO", "Pipeline trigger cadence updated", detail);
+
+  return {
+    changed: changed,
+    removedTriggers: removed,
+    requestedCadenceMinutes: requestedMins,
+    appliedCadenceMinutes: targetMins,
+    expectedSignature: snapshot.expectedSignature
+  };
 }
 
 function normalizePipelineTriggerCadenceMinutes_(minutes) {
@@ -678,15 +852,33 @@ function updatePipelineCadenceState_(cfg, props, matchedCount, computedCount) {
   };
 }
 
-function runPipeline() {
-  var lock = LockService.getScriptLock();
-  if (!lock.tryLock(25000)) { log_("WARN", "Pipeline skipped (lock busy)", {}); return; }
+function runPipeline(opts) {
+  var options = opts || {};
+  var lock = null;
+  var hasLock = false;
+  if (!options.skipLock) {
+    lock = LockService.getScriptLock();
+    if (!lock.tryLock(25000)) { log_("WARN", "Pipeline skipped (lock busy)", {}); return; }
+    hasLock = true;
+  }
 
   var props = PropertiesService.getScriptProperties();
-  var startedUtc = new Date().toISOString();
+  var nowMs = Date.now();
+  var debounce = pipelineDebounceState_(props, nowMs);
+  var startedUtc = new Date(nowMs).toISOString();
+
+  if (debounce.active) {
+    registerDuplicateRunPrevented_(props, "SKIPPED_DEBOUNCE_ACTIVE", {
+      triggerPath: String(options.source || "scheduled"),
+      debounceUntil: debounce.untilIso,
+      remainingMs: debounce.remainingMs
+    });
+    if (hasLock && lock) lock.releaseLock();
+    return;
+  }
 
   try {
-    var cfg = getConfig_();
+    var cfg = options.cfgOverride || getConfig_();
 
     if (!withinActiveHours_(cfg)) {
       props.setProperty(PROP.LAST_PIPELINE_AT, startedUtc);
@@ -771,9 +963,11 @@ function runPipeline() {
     log_("ERROR", "runPipeline error", { message: String(e), stack: (e && e.stack) ? String(e.stack) : "" });
     throw e;
   } finally {
-    lock.releaseLock();
+    setPipelineDebounceForMs_(props, 45000, "pipeline_run_completed");
+    if (hasLock && lock) lock.releaseLock();
   }
 }
+
 
 
 function resolveOddsWindowForPipeline_(cfg, props) {
@@ -1046,3 +1240,45 @@ function refreshOddsOnly() { var cfg = getConfig_(); refreshOdds_(cfg); }
 function refreshMLBScheduleAndLineupsOnly() { var cfg = getConfig_(); refreshMLBScheduleAndLineups_(cfg); }
 function refreshProjectionsForce() { var cfg = getConfig_(); refreshProjectionsIfStale_(cfg, true); }
 function refreshModelAndEdgeOnly() { var cfg = getConfig_(); var mlbRes = refreshMLBScheduleAndLineups_(cfg); refreshModelAndEdge_(cfg, mlbRes); }
+
+
+function dryRunValidateNoopCadenceUpdateSingleRun_() {
+  var fakeProps = {
+    _store: {},
+    getProperty: function (k) { return this._store[k] || ""; },
+    setProperty: function (k, v) { this._store[k] = String(v); }
+  };
+
+  var triggeredRuns = 0;
+  var cadenceUpdate = { changed: false, appliedCadenceMinutes: 15 };
+  var firstDecision = dryRunPostInstallRunDecision_(fakeProps, cadenceUpdate);
+  if (firstDecision.executed) triggeredRuns++;
+  if (firstDecision.executed) fakeProps.setProperty(PROP.PIPELINE_RUN_DEBOUNCE_UNTIL_MS, String(Date.now() + 45000));
+
+  var secondDecision = dryRunPostInstallRunDecision_(fakeProps, cadenceUpdate);
+  if (secondDecision.executed) triggeredRuns++;
+
+  var passed = (triggeredRuns === 1);
+  log_(passed ? "INFO" : "ERROR", "Dry-run validation: no-op cadence update single-run", {
+    passed: passed,
+    triggeredRuns: triggeredRuns,
+    firstReasonCode: firstDecision.reasonCode,
+    secondReasonCode: secondDecision.reasonCode,
+    duplicateRunPreventedCount: toInt_(fakeProps.getProperty(PROP.PIPELINE_DUPLICATE_RUN_PREVENTED), 0)
+  });
+  if (!passed) throw new Error("Expected exactly one pipeline run for no-op cadence update dry-run");
+}
+
+function dryRunPostInstallRunDecision_(propsLike, cadenceUpdate) {
+  var nowMs = Date.now();
+  var untilMs = Math.max(0, toInt_(propsLike.getProperty(PROP.PIPELINE_RUN_DEBOUNCE_UNTIL_MS), 0));
+  if (untilMs > nowMs) {
+    var next = Math.max(0, toInt_(propsLike.getProperty(PROP.PIPELINE_DUPLICATE_RUN_PREVENTED), 0)) + 1;
+    propsLike.setProperty(PROP.PIPELINE_DUPLICATE_RUN_PREVENTED, String(next));
+    return { executed: false, reasonCode: "SKIPPED_DEBOUNCE_ACTIVE" };
+  }
+  return {
+    executed: true,
+    reasonCode: (cadenceUpdate && cadenceUpdate.changed) ? "EXECUTED_INSTALL_CADENCE_CHANGED" : "EXECUTED_INSTALL_NOOP_CADENCE"
+  };
+}

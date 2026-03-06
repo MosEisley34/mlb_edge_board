@@ -92,6 +92,9 @@ function resetWorkbook() {
   props.deleteProperty(PROP.LAST_PIPELINE_STATUS);
   props.deleteProperty(PROP.LAST_PIPELINE_SUMMARY);
   props.deleteProperty(PROP.LAST_CALIBRATION_SUMMARY);
+  props.deleteProperty(PROP.PIPELINE_TRIGGER_SIGNATURE);
+  props.deleteProperty(PROP.PIPELINE_RUN_DEBOUNCE_UNTIL_MS);
+  props.deleteProperty(PROP.PIPELINE_DUPLICATE_RUN_PREVENTED);
   props.deleteProperty(PROP.LAST_HEARTBEAT_KEY);
   props.deleteProperty(PROP.ODDS_WINDOW_CACHE);
   props.deleteProperty(PROP.DISCORD_WEBHOOK);
