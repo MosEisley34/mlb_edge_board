@@ -140,6 +140,7 @@ function maybeRunPipelineAfterInstall_(cfg, cadenceUpdate) {
   var nowMs = Date.now();
   var debounce = pipelineDebounceState_(props, nowMs);
   var decision = { executed: false, reasonCode: "SKIPPED_DEBOUNCE_ACTIVE" };
+  var cadenceUnchangedNoop = shouldSkipPostInstallImmediateRun_(cadenceUpdate);
 
   if (debounce.active) {
     registerDuplicateRunPrevented_(props, decision.reasonCode, {
@@ -154,6 +155,25 @@ function maybeRunPipelineAfterInstall_(cfg, cadenceUpdate) {
     return decision;
   }
 
+  if (cadenceUnchangedNoop) {
+    decision.reasonCode = "SKIPPED_NOOP_INSTALL_RUN";
+    registerDuplicateRunPrevented_(props, decision.reasonCode, {
+      triggerPath: "install",
+      cadenceChanged: false,
+      cadenceMinutes: cadenceUpdate ? cadenceUpdate.appliedCadenceMinutes : "",
+      triggerSignatureChanged: false,
+      installAction: cadenceUpdate ? cadenceUpdate.installAction : ""
+    });
+    log_("INFO", "Post-install immediate run skipped", {
+      reasonCode: decision.reasonCode,
+      cadenceChanged: false,
+      cadenceMinutes: cadenceUpdate ? cadenceUpdate.appliedCadenceMinutes : "",
+      triggerSignatureChanged: false,
+      installAction: cadenceUpdate ? cadenceUpdate.installAction : ""
+    });
+    return decision;
+  }
+
   decision.reasonCode = (cadenceUpdate && cadenceUpdate.changed) ? "EXECUTED_INSTALL_CADENCE_CHANGED" : "EXECUTED_INSTALL_NOOP_CADENCE";
   log_("INFO", "Post-install immediate run executing", {
     reasonCode: decision.reasonCode,
@@ -163,6 +183,10 @@ function maybeRunPipelineAfterInstall_(cfg, cadenceUpdate) {
   runPipeline({ source: "install", reasonCode: decision.reasonCode, cfgOverride: cfg, skipLock: true });
   decision.executed = true;
   return decision;
+}
+
+function shouldSkipPostInstallImmediateRun_(cadenceUpdate) {
+  return !!(cadenceUpdate && cadenceUpdate.installAction === "noop" && !cadenceUpdate.changed && cadenceUpdate.signatureUnchanged);
 }
 
 function triggerSignature_(trigger) {
@@ -748,6 +772,10 @@ function ensurePipelineTriggerCadence_(minutes, reason, detailObj) {
   var detail = detailObj || {};
   detail.reason = String(reason || "unspecified");
   detail.reinstallSkipped = !changed;
+  detail.triggerStateUnchanged = !changed;
+  detail.installAction = String(detail.installAction || "unspecified");
+  detail.skipReasonCode = !changed ? "NOOP_INSTALL_TRIGGER_STATE_UNCHANGED" : "";
+  detail.signatureUnchanged = snapshot.existingSignature === snapshot.expectedSignature;
   detail.removedTriggers = removed;
   detail.existingTriggerCount = snapshot.triggerCount;
   detail.existingTriggerSignature = snapshot.existingSignature;
@@ -760,6 +788,9 @@ function ensurePipelineTriggerCadence_(minutes, reason, detailObj) {
 
   return {
     changed: changed,
+    installAction: detail.installAction,
+    signatureUnchanged: snapshot.existingSignature === snapshot.expectedSignature,
+    skipReasonCode: detail.skipReasonCode,
     removedTriggers: removed,
     requestedCadenceMinutes: requestedMins,
     appliedCadenceMinutes: targetMins,
@@ -1250,7 +1281,7 @@ function dryRunValidateNoopCadenceUpdateSingleRun_() {
   };
 
   var triggeredRuns = 0;
-  var cadenceUpdate = { changed: false, appliedCadenceMinutes: 15 };
+  var cadenceUpdate = { changed: false, appliedCadenceMinutes: 15, installAction: "noop", signatureUnchanged: true };
   var firstDecision = dryRunPostInstallRunDecision_(fakeProps, cadenceUpdate);
   if (firstDecision.executed) triggeredRuns++;
   if (firstDecision.executed) fakeProps.setProperty(PROP.PIPELINE_RUN_DEBOUNCE_UNTIL_MS, String(Date.now() + 45000));
@@ -1258,15 +1289,15 @@ function dryRunValidateNoopCadenceUpdateSingleRun_() {
   var secondDecision = dryRunPostInstallRunDecision_(fakeProps, cadenceUpdate);
   if (secondDecision.executed) triggeredRuns++;
 
-  var passed = (triggeredRuns === 1);
-  log_(passed ? "INFO" : "ERROR", "Dry-run validation: no-op cadence update single-run", {
+  var passed = (triggeredRuns === 0);
+  log_(passed ? "INFO" : "ERROR", "Dry-run validation: no-op cadence update skips immediate run", {
     passed: passed,
     triggeredRuns: triggeredRuns,
     firstReasonCode: firstDecision.reasonCode,
     secondReasonCode: secondDecision.reasonCode,
     duplicateRunPreventedCount: toInt_(fakeProps.getProperty(PROP.PIPELINE_DUPLICATE_RUN_PREVENTED), 0)
   });
-  if (!passed) throw new Error("Expected exactly one pipeline run for no-op cadence update dry-run");
+  if (!passed) throw new Error("Expected no pipeline runs for no-op cadence update dry-run");
 }
 
 function dryRunPostInstallRunDecision_(propsLike, cadenceUpdate) {
@@ -1277,8 +1308,21 @@ function dryRunPostInstallRunDecision_(propsLike, cadenceUpdate) {
     propsLike.setProperty(PROP.PIPELINE_DUPLICATE_RUN_PREVENTED, String(next));
     return { executed: false, reasonCode: "SKIPPED_DEBOUNCE_ACTIVE" };
   }
+  if (shouldSkipPostInstallImmediateRun_(cadenceUpdate)) {
+    var prevented = Math.max(0, toInt_(propsLike.getProperty(PROP.PIPELINE_DUPLICATE_RUN_PREVENTED), 0)) + 1;
+    propsLike.setProperty(PROP.PIPELINE_DUPLICATE_RUN_PREVENTED, String(prevented));
+    return { executed: false, reasonCode: "SKIPPED_NOOP_INSTALL_RUN" };
+  }
   return {
     executed: true,
     reasonCode: (cadenceUpdate && cadenceUpdate.changed) ? "EXECUTED_INSTALL_CADENCE_CHANGED" : "EXECUTED_INSTALL_NOOP_CADENCE"
   };
+}
+
+function dryRunTest_noopInstallDecisionSkip_() {
+  var skip = shouldSkipPostInstallImmediateRun_({ changed: false, installAction: "noop", signatureUnchanged: true });
+  if (!skip) throw new Error("Expected noop install with unchanged signature to skip immediate run");
+  var noSkip = shouldSkipPostInstallImmediateRun_({ changed: false, installAction: "noop", signatureUnchanged: false });
+  if (noSkip) throw new Error("Expected noop install with changed signature signal to allow immediate run");
+  log_("INFO", "dryRunTest_noopInstallDecisionSkip passed", {});
 }
