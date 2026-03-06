@@ -175,6 +175,7 @@ function getConfig_() {
   cfg.ODDS_WINDOW_FORCE_REFRESH = String(cfg.ODDS_WINDOW_FORCE_REFRESH || "FALSE").toUpperCase() === "TRUE";
   cfg.ODDS_NO_GAMES_BEHAVIOR = String(cfg.ODDS_NO_GAMES_BEHAVIOR || "SKIP").toUpperCase();
   cfg.MATCH_TOL_MIN = toInt_(cfg.MATCH_TOL_MIN, 360);
+  cfg.ODDS_TEAM_MATCH_FALLBACK_ENABLE = String(cfg.ODDS_TEAM_MATCH_FALLBACK_ENABLE || "TRUE").toUpperCase() === "TRUE";
   cfg.LINEUP_MIN = toInt_(cfg.LINEUP_MIN, 9);
   cfg.LINEUP_FALLBACK_MODE = String(cfg.LINEUP_FALLBACK_MODE || "STRICT").toUpperCase();
   cfg.LINEUP_PA_WEIGHTS = [

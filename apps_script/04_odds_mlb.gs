@@ -314,7 +314,7 @@ function refreshMLBScheduleAndLineups_(cfg, opts) {
   replaceSheetBody_(shSchedule, schedRows);
 
   var matchTolMin = toInt_(cfg.MATCH_TOL_MIN, 360);
-  var matchRes = matchOddsToSchedule_(shOdds, shSchedule, matchTolMin);
+  var matchRes = matchOddsToSchedule_(shOdds, shSchedule, matchTolMin, { enableTeamFallback: cfg.ODDS_TEAM_MATCH_FALLBACK_ENABLE });
   var matched = matchRes.matched;
 
   if (!shouldUseExpandedFallback && matched.length === 0 && (matchRes.rejectionSummary.no_team_token_match || 0) > 0) {
@@ -357,7 +357,7 @@ function refreshMLBScheduleAndLineups_(cfg, opts) {
       var shSchedExpanded = ss.insertSheet("__mlb_sched_expanded_tmp__" + String(new Date().getTime()));
       try {
         replaceSheetBody_(shSchedExpanded, expandedRows);
-        var expandedMatchRes = matchOddsToSchedule_(shOdds, shSchedExpanded, matchTolMin);
+        var expandedMatchRes = matchOddsToSchedule_(shOdds, shSchedExpanded, matchTolMin, { enableTeamFallback: cfg.ODDS_TEAM_MATCH_FALLBACK_ENABLE });
         if (expandedMatchRes.matched.length > 0 || matched.length === 0) {
           matchRes = expandedMatchRes;
           matched = expandedMatchRes.matched;
@@ -515,7 +515,10 @@ function getProbablePitcherNameSafe_(g, side) {
   } catch (e) { return ""; }
 }
 
-function matchOddsToSchedule_(shOdds, shSchedule, matchTolMin) {
+function matchOddsToSchedule_(shOdds, shSchedule, matchTolMin, opts) {
+  opts = opts || {};
+  var enableTeamFallback = (opts.enableTeamFallback !== false);
+
   var odds = shOdds.getDataRange().getValues();
   var sched = shSchedule.getDataRange().getValues();
   if (odds.length < 2 || sched.length < 2) return { matched: [], rejectionSummary: { insufficient_input_rows: 0 } };
@@ -532,14 +535,25 @@ function matchOddsToSchedule_(shOdds, shSchedule, matchTolMin) {
   var sIdxDate = indexOf_(sh, "gameDate_utc");
   var sIdxAway = indexOf_(sh, "away_team");
   var sIdxHome = indexOf_(sh, "home_team");
+  var sIdxAwayId = indexOf_(sh, "away_team_id");
+  var sIdxHomeId = indexOf_(sh, "home_team_id");
 
   var schedRows = [];
   for (var i = 1; i < sched.length; i++) {
     var r = sched[i];
     var gamePk = String(r[sIdxPk] || "");
     if (!gamePk) continue;
-    schedRows.push({ mlb_gamePk: gamePk, gameDate: String(r[sIdxDate] || ""), away_team: String(r[sIdxAway] || ""), home_team: String(r[sIdxHome] || "") });
+    schedRows.push({
+      mlb_gamePk: gamePk,
+      gameDate: String(r[sIdxDate] || ""),
+      away_team: String(r[sIdxAway] || ""),
+      home_team: String(r[sIdxHome] || ""),
+      away_team_id: String(r[sIdxAwayId] || ""),
+      home_team_id: String(r[sIdxHomeId] || "")
+    });
   }
+
+  log_("INFO", "matchOddsToSchedule schedule inventory", buildScheduleInventory_(schedRows));
 
   var out = [];
   var rejectionSummary = {
@@ -547,6 +561,8 @@ function matchOddsToSchedule_(shOdds, shSchedule, matchTolMin) {
     no_team_token_match: 0,
     outside_time_tolerance: 0
   };
+  var unmatchedNoTeamEvents = [];
+
   for (var j = 1; j < odds.length; j++) {
     var or = odds[j];
     var oddsId = String(or[oIdxId] || "");
@@ -577,66 +593,289 @@ function matchOddsToSchedule_(shOdds, shSchedule, matchTolMin) {
       continue;
     }
 
-    var found = null;
-    var bestDt = 999999;
-    var teamCandidates = [];
-    var tolCandidates = [];
+    var firstPass = findBestScheduleMatch_(schedRows, {
+      oddsAwayRaw: oAway,
+      oddsHomeRaw: oHome,
+      oddsAwayNorm: oAwayNorm,
+      oddsHomeNorm: oHomeNorm,
+      oddsTime: oTime,
+      matchTolMin: matchTolMin,
+      mode: "canonical_exact"
+    });
 
-    for (var s = 0; s < schedRows.length; s++) {
-      var sr = schedRows[s];
-      var sAwayNorm = normalizeTeam_(sr.away_team);
-      var sHomeNorm = normalizeTeam_(sr.home_team);
-      if (oAwayNorm !== sAwayNorm) continue;
-      if (oHomeNorm !== sHomeNorm) continue;
-
-      teamCandidates.push({
-        mlb_gamePk: sr.mlb_gamePk,
-        gameDate_utc: sr.gameDate,
-        away_team: sr.away_team,
-        home_team: sr.home_team,
-        team_tokens: {
-          raw: { away: sr.away_team, home: sr.home_team },
-          canonical: { away: sAwayNorm, home: sHomeNorm }
-        }
-      });
-
-      var sTime = Date.parse(String(sr.gameDate || "")) || 0;
-      var dtMin = Math.abs(oTime - sTime) / 60000;
-      if (dtMin <= matchTolMin) {
-        tolCandidates.push({
-          mlb_gamePk: sr.mlb_gamePk,
-          gameDate_utc: sr.gameDate,
-          dt_min: dtMin
-        });
-      }
-      if (dtMin <= matchTolMin && dtMin < bestDt) { bestDt = dtMin; found = sr; }
-    }
-
-    if (found) {
+    if (firstPass.found) {
       out.push({
         odds_game_id: oddsId,
-        mlb_gamePk: found.mlb_gamePk,
+        mlb_gamePk: firstPass.found.mlb_gamePk,
         commence_time_local: Utilities.formatDate(new Date(oTime), TZ, "yyyy-MM-dd HH:mm")
       });
-    } else {
-      var reason = teamCandidates.length === 0 ? "no_team_token_match" : "outside_time_tolerance";
-      rejectionSummary[reason] = (rejectionSummary[reason] || 0) + 1;
-      log_("DEBUG", "matchOddsToSchedule unmatched", {
-        reason: reason,
-        odds_event_id: oddsId,
-        away_team: oAway,
-        home_team: oHome,
-        commence_time_utc: oTimeRaw,
-        team_tokens: {
-          raw: { away: oAway, home: oHome },
-          canonical: { away: oAwayNorm, home: oHomeNorm }
-        },
-        candidate_schedule_rows: teamCandidates,
-        candidates_in_tolerance_window: tolCandidates,
-        match_tolerance_min: matchTolMin
+      continue;
+    }
+
+    var reason = firstPass.teamCandidates.length === 0 ? "no_team_token_match" : "outside_time_tolerance";
+    rejectionSummary[reason] = (rejectionSummary[reason] || 0) + 1;
+
+    var unmatchedEvent = {
+      odds_game_id: oddsId,
+      away_team: oAway,
+      home_team: oHome,
+      commence_time_utc: oTimeRaw,
+      commence_time_ms: oTime,
+      away_team_norm: oAwayNorm,
+      home_team_norm: oHomeNorm,
+      initial_reason: reason,
+      teamCandidates: firstPass.teamCandidates,
+      tolCandidates: firstPass.tolCandidates,
+      nearMatches: getNearMatchDiagnostics_(schedRows, oAway, oHome)
+    };
+
+    if (reason === "no_team_token_match") unmatchedNoTeamEvents.push(unmatchedEvent);
+
+    log_("DEBUG", "matchOddsToSchedule unmatched", {
+      reason: reason,
+      odds_event_id: oddsId,
+      away_team: oAway,
+      home_team: oHome,
+      commence_time_utc: oTimeRaw,
+      team_tokens: {
+        raw: { away: oAway, home: oHome },
+        canonical: { away: oAwayNorm, home: oHomeNorm }
+      },
+      candidate_schedule_rows: firstPass.teamCandidates,
+      candidates_in_tolerance_window: firstPass.tolCandidates,
+      match_tolerance_min: matchTolMin,
+      near_match_diagnostics: unmatchedEvent.nearMatches
+    });
+  }
+
+  if (enableTeamFallback && out.length === 0 && odds.length > 1 && unmatchedNoTeamEvents.length > 0 && unmatchedNoTeamEvents.length === (odds.length - 1)) {
+    log_("INFO", "matchOddsToSchedule fallback attempt", {
+      trigger: "all_events_no_team_token_match",
+      unmatched_events: unmatchedNoTeamEvents.length,
+      schedule_inventory_hash: getScheduleInventoryHash_(schedRows)
+    });
+
+    for (var f = 0; f < unmatchedNoTeamEvents.length; f++) {
+      var ue = unmatchedNoTeamEvents[f];
+      var fallbackRes = findBestScheduleMatch_(schedRows, {
+        oddsAwayRaw: ue.away_team,
+        oddsHomeRaw: ue.home_team,
+        oddsAwayNorm: ue.away_team_norm,
+        oddsHomeNorm: ue.home_team_norm,
+        oddsTime: ue.commence_time_ms,
+        matchTolMin: matchTolMin,
+        mode: "fallback_similarity"
+      });
+      if (!fallbackRes.found) continue;
+
+      out.push({
+        odds_game_id: ue.odds_game_id,
+        mlb_gamePk: fallbackRes.found.mlb_gamePk,
+        commence_time_local: Utilities.formatDate(new Date(ue.commence_time_ms), TZ, "yyyy-MM-dd HH:mm")
+      });
+
+      rejectionSummary.no_team_token_match = Math.max(0, (rejectionSummary.no_team_token_match || 0) - 1);
+
+      log_("INFO", "matchOddsToSchedule fallback matched", {
+        match_mode: "fallback_team_similarity",
+        odds_event_id: ue.odds_game_id,
+        away_team: ue.away_team,
+        home_team: ue.home_team,
+        mlb_gamePk: fallbackRes.found.mlb_gamePk,
+        schedule_away_team: fallbackRes.found.away_team,
+        schedule_home_team: fallbackRes.found.home_team,
+        schedule_away_team_id: fallbackRes.found.away_team_id,
+        schedule_home_team_id: fallbackRes.found.home_team_id,
+        team_match_score: round_(fallbackRes.bestScore, 4)
       });
     }
   }
 
+  if (out.length === 0 && (rejectionSummary.no_team_token_match || 0) > 0) {
+    rejectionSummary.schedule_inventory_hash = getScheduleInventoryHash_(schedRows);
+  }
+
   return { matched: out, rejectionSummary: rejectionSummary };
+}
+
+function findBestScheduleMatch_(schedRows, input) {
+  var found = null;
+  var bestDt = 999999;
+  var bestScore = -1;
+  var teamCandidates = [];
+  var tolCandidates = [];
+  var useFallback = String(input.mode || "") === "fallback_similarity";
+
+  for (var s = 0; s < schedRows.length; s++) {
+    var sr = schedRows[s];
+    var sAwayNorm = normalizeTeam_(sr.away_team);
+    var sHomeNorm = normalizeTeam_(sr.home_team);
+
+    var teamMatched = (input.oddsAwayNorm === sAwayNorm && input.oddsHomeNorm === sHomeNorm);
+    var teamScore = teamMatched ? 1 : 0;
+
+    if (useFallback && !teamMatched) {
+      teamScore = scoreFallbackTeamPair_(input.oddsAwayRaw, input.oddsHomeRaw, sr.away_team, sr.home_team, sr.away_team_id, sr.home_team_id);
+      teamMatched = teamScore >= 0.75;
+    }
+
+    if (!teamMatched) continue;
+
+    teamCandidates.push({
+      mlb_gamePk: sr.mlb_gamePk,
+      gameDate_utc: sr.gameDate,
+      away_team: sr.away_team,
+      home_team: sr.home_team,
+      away_team_id: sr.away_team_id,
+      home_team_id: sr.home_team_id,
+      team_match_score: round_(teamScore, 4),
+      team_tokens: {
+        raw: { away: sr.away_team, home: sr.home_team },
+        canonical: { away: sAwayNorm, home: sHomeNorm }
+      }
+    });
+
+    var sTime = Date.parse(String(sr.gameDate || "")) || 0;
+    var dtMin = Math.abs(input.oddsTime - sTime) / 60000;
+    if (dtMin <= input.matchTolMin) {
+      tolCandidates.push({
+        mlb_gamePk: sr.mlb_gamePk,
+        gameDate_utc: sr.gameDate,
+        dt_min: dtMin,
+        team_match_score: round_(teamScore, 4)
+      });
+    }
+    if (dtMin <= input.matchTolMin && (dtMin < bestDt || (dtMin === bestDt && teamScore > bestScore))) {
+      bestDt = dtMin;
+      bestScore = teamScore;
+      found = sr;
+    }
+  }
+
+  return { found: found, teamCandidates: teamCandidates, tolCandidates: tolCandidates, bestScore: bestScore };
+}
+
+function scoreFallbackTeamPair_(oddsAway, oddsHome, schedAway, schedHome, schedAwayId, schedHomeId) {
+  var awayScore = scoreFallbackTeam_(oddsAway, schedAway, schedAwayId);
+  var homeScore = scoreFallbackTeam_(oddsHome, schedHome, schedHomeId);
+  return (awayScore + homeScore) / 2;
+}
+
+function scoreFallbackTeam_(oddsTeam, schedTeam, schedTeamId) {
+  var normOdds = normalizeTeam_(oddsTeam);
+  var normSched = normalizeTeam_(schedTeam);
+  if (normOdds && normSched && normOdds === normSched) return 1;
+
+  var oddsTokens = teamTokensForSimilarity_(oddsTeam);
+  var schedTokens = teamTokensForSimilarity_(schedTeam);
+
+  var overlap = tokenOverlapRatio_(oddsTokens, schedTokens);
+  var oddsJoined = oddsTokens.join(" ");
+  var schedJoined = schedTokens.join(" ");
+  var containsBoost = (oddsJoined && schedJoined && (oddsJoined.indexOf(schedJoined) >= 0 || schedJoined.indexOf(oddsJoined) >= 0)) ? 0.9 : 0;
+
+  var schedIdHit = false;
+  if (schedTeamId) {
+    var oddsRaw = String(oddsTeam || "");
+    var normId = String(schedTeamId || "").toLowerCase();
+    if (oddsRaw.toLowerCase().indexOf(normId) >= 0 || normOdds === normId) schedIdHit = true;
+  }
+
+  if (schedIdHit) return 1;
+  return Math.max(overlap, containsBoost);
+}
+
+function teamTokensForSimilarity_(teamName) {
+  var norm = normalizeTeam_(teamName);
+  var src = norm || String(teamName || "").toLowerCase();
+  var raw = src.replace(/[^a-z0-9 ]+/g, " ").split(/\s+/);
+  var out = [];
+  for (var i = 0; i < raw.length; i++) {
+    var tk = String(raw[i] || "").trim();
+    if (!tk || tk.length <= 1) continue;
+    out.push(tk);
+  }
+  return out;
+}
+
+function tokenOverlapRatio_(aTokens, bTokens) {
+  if (!aTokens.length || !bTokens.length) return 0;
+  var bSet = {};
+  for (var i = 0; i < bTokens.length; i++) bSet[bTokens[i]] = true;
+  var hit = 0;
+  for (var j = 0; j < aTokens.length; j++) if (bSet[aTokens[j]]) hit++;
+  return hit / Math.max(aTokens.length, bTokens.length);
+}
+
+function getNearMatchDiagnostics_(schedRows, oddsAway, oddsHome) {
+  var scores = [];
+  for (var i = 0; i < schedRows.length; i++) {
+    var sr = schedRows[i];
+    var awayScore = scoreFallbackTeam_(oddsAway, sr.away_team, sr.away_team_id);
+    var homeScore = scoreFallbackTeam_(oddsHome, sr.home_team, sr.home_team_id);
+    scores.push({
+      mlb_gamePk: sr.mlb_gamePk,
+      away_team: sr.away_team,
+      home_team: sr.home_team,
+      away_team_id: sr.away_team_id,
+      home_team_id: sr.home_team_id,
+      away_similarity: round_(awayScore, 4),
+      home_similarity: round_(homeScore, 4),
+      pair_similarity: round_((awayScore + homeScore) / 2, 4)
+    });
+  }
+  scores.sort(function (a, b) { return Number(b.pair_similarity || 0) - Number(a.pair_similarity || 0); });
+  return scores.slice(0, 3);
+}
+
+function buildScheduleInventory_(schedRows) {
+  var awaySeen = {};
+  var homeSeen = {};
+  var away = [];
+  var home = [];
+
+  for (var i = 0; i < schedRows.length; i++) {
+    var a = String(schedRows[i].away_team || "").trim();
+    var h = String(schedRows[i].home_team || "").trim();
+    if (a && !awaySeen[a]) { awaySeen[a] = true; away.push(a); }
+    if (h && !homeSeen[h]) { homeSeen[h] = true; home.push(h); }
+  }
+
+  away.sort();
+  home.sort();
+  return {
+    schedule_games: schedRows.length,
+    away_unique_count: away.length,
+    home_unique_count: home.length,
+    away_unique_names: away,
+    home_unique_names: home,
+    inventory_hash: getScheduleInventoryHash_(schedRows)
+  };
+}
+
+function getScheduleInventoryHash_(schedRows) {
+  var inv = buildScheduleInventorySeed_(schedRows);
+  var bytes = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, inv);
+  var out = [];
+  for (var i = 0; i < bytes.length; i++) {
+    var v = (bytes[i] + 256) % 256;
+    var hx = v.toString(16);
+    out.push(hx.length === 1 ? "0" + hx : hx);
+  }
+  return out.join("").slice(0, 16);
+}
+
+function buildScheduleInventorySeed_(schedRows) {
+  var entries = [];
+  for (var i = 0; i < schedRows.length; i++) {
+    var sr = schedRows[i];
+    entries.push([
+      normalizeTeam_(sr.away_team),
+      normalizeTeam_(sr.home_team),
+      String(sr.away_team_id || ""),
+      String(sr.home_team_id || "")
+    ].join("|"));
+  }
+  entries.sort();
+  return entries.join("||");
 }
