@@ -356,6 +356,7 @@ function refreshMLBScheduleAndLineups_(cfg, opts) {
       }
       var shSchedExpanded = ss.insertSheet("__mlb_sched_expanded_tmp__" + String(new Date().getTime()));
       try {
+        ensureScheduleHeader_(shSchedExpanded);
         replaceSheetBody_(shSchedExpanded, expandedRows);
         var expandedMatchRes = matchOddsToSchedule_(shOdds, shSchedExpanded, matchTolMin, { enableTeamFallback: cfg.ODDS_TEAM_MATCH_FALLBACK_ENABLE });
         if (expandedMatchRes.matched.length > 0 || matched.length === 0) {
@@ -686,7 +687,8 @@ function matchOddsToSchedule_(shOdds, shSchedule, matchTolMin, opts) {
         schedule_home_team: fallbackRes.found.home_team,
         schedule_away_team_id: fallbackRes.found.away_team_id,
         schedule_home_team_id: fallbackRes.found.home_team_id,
-        team_match_score: round_(fallbackRes.bestScore, 4)
+        team_match_score: round_(fallbackRes.bestScore, 4),
+        match_orientation: (fallbackRes.bestScore >= 0.97 ? "swapped_orientation_or_exact" : "fallback_similarity")
       });
     }
   }
@@ -711,11 +713,30 @@ function findBestScheduleMatch_(schedRows, input) {
     var sAwayNorm = normalizeTeam_(sr.away_team);
     var sHomeNorm = normalizeTeam_(sr.home_team);
 
-    var teamMatched = (input.oddsAwayNorm === sAwayNorm && input.oddsHomeNorm === sHomeNorm);
-    var teamScore = teamMatched ? 1 : 0;
+    var directExact = (input.oddsAwayNorm === sAwayNorm && input.oddsHomeNorm === sHomeNorm);
+    var swappedExact = (input.oddsAwayNorm === sHomeNorm && input.oddsHomeNorm === sAwayNorm);
+    var teamMatched = false;
+    var teamScore = 0;
+    var orientation = "direct";
 
-    if (useFallback && !teamMatched) {
-      teamScore = scoreFallbackTeamPair_(input.oddsAwayRaw, input.oddsHomeRaw, sr.away_team, sr.home_team, sr.away_team_id, sr.home_team_id);
+    if (directExact) {
+      teamMatched = true;
+      teamScore = 1;
+      orientation = "direct";
+    } else if (swappedExact) {
+      teamMatched = true;
+      teamScore = 0.98;
+      orientation = "swapped_orientation";
+    } else if (useFallback) {
+      var directScore = scoreFallbackTeamPair_(input.oddsAwayRaw, input.oddsHomeRaw, sr.away_team, sr.home_team, sr.away_team_id, sr.home_team_id);
+      var swappedScore = scoreFallbackTeamPair_(input.oddsAwayRaw, input.oddsHomeRaw, sr.home_team, sr.away_team, sr.home_team_id, sr.away_team_id);
+      if (swappedScore > directScore) {
+        teamScore = swappedScore;
+        orientation = "swapped_orientation";
+      } else {
+        teamScore = directScore;
+        orientation = "direct";
+      }
       teamMatched = teamScore >= 0.75;
     }
 
@@ -729,6 +750,7 @@ function findBestScheduleMatch_(schedRows, input) {
       away_team_id: sr.away_team_id,
       home_team_id: sr.home_team_id,
       team_match_score: round_(teamScore, 4),
+      match_orientation: orientation,
       team_tokens: {
         raw: { away: sr.away_team, home: sr.home_team },
         canonical: { away: sAwayNorm, home: sHomeNorm }
@@ -742,7 +764,8 @@ function findBestScheduleMatch_(schedRows, input) {
         mlb_gamePk: sr.mlb_gamePk,
         gameDate_utc: sr.gameDate,
         dt_min: dtMin,
-        team_match_score: round_(teamScore, 4)
+        team_match_score: round_(teamScore, 4),
+        match_orientation: orientation
       });
     }
     if (dtMin <= input.matchTolMin && (dtMin < bestDt || (dtMin === bestDt && teamScore > bestScore))) {
