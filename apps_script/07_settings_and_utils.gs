@@ -39,6 +39,8 @@ function ensureSettings_(sh) {
     ["ODDS_WINDOW_REFRESH_MIN", "5", "Minimum minutes between odds-window schedule refresh fetch attempts"],
     ["ODDS_WINDOW_FORCE_REFRESH", "FALSE", "TRUE/FALSE to bypass cache freshness and min refresh interval"],
     ["ODDS_NO_GAMES_BEHAVIOR", "SKIP", "SKIP or FALLBACK_STATIC_WINDOW"],
+    ["ODDS_SCHEDULE_QUERY_BUFFER_BEFORE_H", "24", "Hours before min odds commence_time_utc when querying MLB schedule"],
+    ["ODDS_SCHEDULE_QUERY_BUFFER_AFTER_H", "24", "Hours after max odds commence_time_utc when querying MLB schedule"],
 
     ["MATCH_TOL_MIN", "360", "Team+time match tolerance (minutes)"],
     ["LINEUP_MIN", "9", "Min hitters per lineup"],
@@ -174,6 +176,8 @@ function getConfig_() {
   cfg.ODDS_WINDOW_REFRESH_MIN = toInt_(cfg.ODDS_WINDOW_REFRESH_MIN, 5);
   cfg.ODDS_WINDOW_FORCE_REFRESH = String(cfg.ODDS_WINDOW_FORCE_REFRESH || "FALSE").toUpperCase() === "TRUE";
   cfg.ODDS_NO_GAMES_BEHAVIOR = String(cfg.ODDS_NO_GAMES_BEHAVIOR || "SKIP").toUpperCase();
+  cfg.ODDS_SCHEDULE_QUERY_BUFFER_BEFORE_H = Math.max(0, toFloat_(cfg.ODDS_SCHEDULE_QUERY_BUFFER_BEFORE_H, 24));
+  cfg.ODDS_SCHEDULE_QUERY_BUFFER_AFTER_H = Math.max(0, toFloat_(cfg.ODDS_SCHEDULE_QUERY_BUFFER_AFTER_H, 24));
   cfg.MATCH_TOL_MIN = toInt_(cfg.MATCH_TOL_MIN, 360);
   cfg.ODDS_TEAM_MATCH_FALLBACK_ENABLE = String(cfg.ODDS_TEAM_MATCH_FALLBACK_ENABLE || "TRUE").toUpperCase() === "TRUE";
   cfg.LINEUP_MIN = toInt_(cfg.LINEUP_MIN, 9);
