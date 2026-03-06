@@ -49,7 +49,7 @@ function refreshModelAndEdge_core_(cfg, mlbRes) {
       rejectionSummary: mlbRes.rejectionSummary || {}
     });
   } else {
-    fallbackMatchRes = matchOddsToSchedule_(shOdds, shSched, toInt_(cfg.MATCH_TOL_MIN, 360));
+    fallbackMatchRes = matchOddsToSchedule_(shOdds, shSched, toInt_(cfg.MATCH_TOL_MIN, 360), { enableTeamFallback: cfg.ODDS_TEAM_MATCH_FALLBACK_ENABLE });
     matched = (fallbackMatchRes.matched || []);
   }
 
