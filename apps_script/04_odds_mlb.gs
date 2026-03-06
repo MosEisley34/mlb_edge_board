@@ -263,6 +263,7 @@ function refreshMLBScheduleAndLineups_(cfg, opts) {
 
   var shouldUseExpandedFallback = oddsRows.length <= 3;
   var expandedFallbackUsed = false;
+  var expandedWindowFallbackSkipReasonCode = "";
 
   var oddsSportKey = resolveOddsSportKey_(oddsRows, opts.sportKeyUsed || "");
   var schedMain = fetchScheduleGames_(startDate, endDate, "");
@@ -320,6 +321,19 @@ function refreshMLBScheduleAndLineups_(cfg, opts) {
   var matched = matchRes.matched;
   var firstPassAllEventsNoTeamTokenMatch = isAllEventsNoTeamTokenMatch_(matched.length, matchRes.rejectionSummary, oddsRows.length);
   var scheduleWindowMatchPath = matched.length > 0 ? "primary-window matched" : "fallback required";
+  var firstPassFullMatchNoHardRejections = isPrimaryWindowFullMatchWithoutHardRejections_(matched.length, matchRes.rejectionSummary, oddsRows.length);
+
+  if (firstPassFullMatchNoHardRejections) {
+    shouldUseExpandedFallback = false;
+    expandedWindowFallbackSkipReasonCode = "PRIMARY_PASS_MATCH_SHORT_CIRCUIT";
+    log_("INFO", "MLB schedule expanded-window fallback skipped", {
+      reasonCode: expandedWindowFallbackSkipReasonCode,
+      oddsUpcoming: oddsRows.length,
+      firstPassMatched: matched.length,
+      scheduleWindowMatchPath: scheduleWindowMatchPath,
+      firstPassRejectionSummary: matchRes.rejectionSummary
+    });
+  }
 
   if (!shouldUseExpandedFallback && matched.length === 0 && (matchRes.rejectionSummary.no_team_token_match || 0) > 0) {
     shouldUseExpandedFallback = true;
@@ -405,6 +419,7 @@ function refreshMLBScheduleAndLineups_(cfg, opts) {
     scheduleWindowMatchPath: scheduleWindowMatchPath,
     firstPassAllEventsNoTeamTokenMatch: firstPassAllEventsNoTeamTokenMatch,
     expandedWindowFallbackUsed: expandedFallbackUsed,
+    expandedWindowFallbackSkipReasonCode: expandedWindowFallbackSkipReasonCode,
     rejectionSummary: matchRes.rejectionSummary
   });
   return {
@@ -414,10 +429,23 @@ function refreshMLBScheduleAndLineups_(cfg, opts) {
     matched: matched,
     rejectionSummary: matchRes.rejectionSummary,
     expandedWindowFallbackUsed: expandedFallbackUsed,
+    expandedWindowFallbackSkipReasonCode: expandedWindowFallbackSkipReasonCode,
     scheduleWindowMatchPath: scheduleWindowMatchPath,
     firstPassAllEventsNoTeamTokenMatch: firstPassAllEventsNoTeamTokenMatch,
     queryWindow: queryWindow
   };
+}
+
+function isPrimaryWindowFullMatchWithoutHardRejections_(matchedCount, rejectionSummary, oddsCount) {
+  var totalOdds = Math.max(0, Number(oddsCount || 0));
+  var matched = Math.max(0, Number(matchedCount || 0));
+  if (totalOdds === 0) return false;
+  if (matched < totalOdds) return false;
+
+  var summary = rejectionSummary || {};
+  return Number(summary.invalid_odds_time || 0) === 0 &&
+    Number(summary.outside_time_tolerance || 0) === 0 &&
+    Number(summary.no_team_token_match || 0) === 0;
 }
 
 function deriveScheduleQueryWindowFromOdds_(commenceTimes, cfg, nowOverride) {
@@ -1033,10 +1061,30 @@ function test_scheduleWindow_matchGuardrail_noAllEventsNoTeamTokenMatch_() {
   assertEq_("guardrail no all-events trigger", isAllEventsNoTeamTokenMatch_(matched, rejectionSummary, samples.length), false);
 }
 
+function test_scheduleWindow_primaryPassShortCircuit_() {
+  var decision = isPrimaryWindowFullMatchWithoutHardRejections_(3, {
+    invalid_odds_time: 0,
+    outside_time_tolerance: 0,
+    no_team_token_match: 0
+  }, 3);
+  assertEq_("primary pass short-circuit true", decision, true);
+}
+
+function test_scheduleWindow_primaryPassNoShortCircuitWhenRejected_() {
+  var decision = isPrimaryWindowFullMatchWithoutHardRejections_(3, {
+    invalid_odds_time: 1,
+    outside_time_tolerance: 0,
+    no_team_token_match: 0
+  }, 3);
+  assertEq_("primary pass short-circuit false when hard rejection", decision, false);
+}
+
 function runScheduleWindowGuardrailTests_() {
   test_scheduleQueryWindow_midnightBoundary_();
   test_scheduleQueryWindow_splitSquadCoverage_();
   test_scheduleWindow_matchGuardrail_noAllEventsNoTeamTokenMatch_();
+  test_scheduleWindow_primaryPassShortCircuit_();
+  test_scheduleWindow_primaryPassNoShortCircuitWhenRejected_();
   log_("INFO", "runScheduleWindowGuardrailTests passed", {});
   return true;
 }
