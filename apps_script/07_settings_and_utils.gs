@@ -41,6 +41,9 @@ function ensureSettings_(sh) {
     ["ODDS_NO_GAMES_BEHAVIOR", "SKIP", "SKIP or FALLBACK_STATIC_WINDOW"],
     ["ODDS_SCHEDULE_QUERY_BUFFER_BEFORE_H", "24", "Hours before min odds commence_time_utc when querying MLB schedule"],
     ["ODDS_SCHEDULE_QUERY_BUFFER_AFTER_H", "24", "Hours after max odds commence_time_utc when querying MLB schedule"],
+    ["ODDS_ALERT_REMAINING_THRESHOLD", "75", "Warn when Odds API remaining credits are <= this value"],
+    ["ODDS_ALERT_COOLDOWN_MIN", "180", "Minimum minutes between low-credit alerts while remaining is low"],
+    ["ODDS_ALERT_ON_EVERY_CALL_UNDER_THRESHOLD", "FALSE", "TRUE/FALSE: send warning on every low-credit call (ignores cooldown)"],
 
     ["MATCH_TOL_MIN", "360", "Team+time match tolerance (minutes)"],
     ["LINEUP_MIN", "9", "Min hitters per lineup"],
@@ -182,6 +185,9 @@ function getConfig_() {
   cfg.ODDS_NO_GAMES_BEHAVIOR = String(cfg.ODDS_NO_GAMES_BEHAVIOR || "SKIP").toUpperCase();
   cfg.ODDS_SCHEDULE_QUERY_BUFFER_BEFORE_H = Math.max(0, toFloat_(cfg.ODDS_SCHEDULE_QUERY_BUFFER_BEFORE_H, 24));
   cfg.ODDS_SCHEDULE_QUERY_BUFFER_AFTER_H = Math.max(0, toFloat_(cfg.ODDS_SCHEDULE_QUERY_BUFFER_AFTER_H, 24));
+  cfg.ODDS_ALERT_REMAINING_THRESHOLD = Math.max(0, toInt_(cfg.ODDS_ALERT_REMAINING_THRESHOLD, 75));
+  cfg.ODDS_ALERT_COOLDOWN_MIN = Math.max(0, toInt_(cfg.ODDS_ALERT_COOLDOWN_MIN, 180));
+  cfg.ODDS_ALERT_ON_EVERY_CALL_UNDER_THRESHOLD = String(cfg.ODDS_ALERT_ON_EVERY_CALL_UNDER_THRESHOLD || "FALSE").toUpperCase() === "TRUE";
   cfg.MATCH_TOL_MIN = toInt_(cfg.MATCH_TOL_MIN, 360);
   cfg.ODDS_TEAM_MATCH_FALLBACK_ENABLE = String(cfg.ODDS_TEAM_MATCH_FALLBACK_ENABLE || "TRUE").toUpperCase() === "TRUE";
   cfg.LINEUP_MIN = toInt_(cfg.LINEUP_MIN, 9);
