@@ -892,6 +892,105 @@ function updatePipelineCadenceState_(cfg, props, matchedCount, computedCount) {
   };
 }
 
+
+function evaluateOddsFetchBlocker_(cfg, props, nowMs) {
+  var threshold = Math.max(0, toInt_(cfg.ODDS_MIN_REMAINING_TO_FETCH, 20));
+  var cooldownMin = Math.max(1, toInt_(cfg.ODDS_FETCH_BLOCK_MIN, 120));
+  var remainingRaw = props.getProperty(PROP.ODDS_LAST_REMAINING_CREDITS);
+  var remaining = isFinite(Number(remainingRaw)) ? Math.max(0, toInt_(remainingRaw, 0)) : null;
+  var creditsAtMs = Math.max(0, toInt_(props.getProperty(PROP.ODDS_LAST_CREDITS_AT_MS), 0));
+  var existingUntilMs = Math.max(0, toInt_(props.getProperty(PROP.ODDS_FETCH_BLOCK_UNTIL_MS), 0));
+
+  if (existingUntilMs > nowMs) {
+    return {
+      blocked: true,
+      engagedNow: false,
+      reasonCode: "odds_fetch_blocked_low_credits",
+      remaining: remaining,
+      creditsAtMs: creditsAtMs,
+      threshold: threshold,
+      unblockAtMs: existingUntilMs,
+      unblockAtIso: new Date(existingUntilMs).toISOString(),
+      cooldownMin: cooldownMin
+    };
+  }
+
+  if (existingUntilMs > 0) {
+    props.deleteProperty(PROP.ODDS_FETCH_BLOCK_UNTIL_MS);
+    props.deleteProperty(PROP.ODDS_FETCH_BLOCK_ALERT_SENT_AT_MS);
+  }
+
+  if (remaining === null || remaining >= threshold) {
+    return { blocked: false, engagedNow: false, remaining: remaining, threshold: threshold, cooldownMin: cooldownMin, creditsAtMs: creditsAtMs };
+  }
+
+  var unblockAtMs = nowMs + (cooldownMin * 60000);
+  props.setProperty(PROP.ODDS_FETCH_BLOCK_UNTIL_MS, String(unblockAtMs));
+  return {
+    blocked: true,
+    engagedNow: true,
+    reasonCode: "odds_fetch_blocked_low_credits",
+    remaining: remaining,
+    creditsAtMs: creditsAtMs,
+    threshold: threshold,
+    unblockAtMs: unblockAtMs,
+    unblockAtIso: new Date(unblockAtMs).toISOString(),
+    cooldownMin: cooldownMin
+  };
+}
+
+function maybeSendOddsFetchBlockerAlert_(cfg, blockState, props) {
+  if (!blockState || !blockState.engagedNow || !blockState.blocked) return;
+  var alertSentAtMs = Math.max(0, toInt_(props.getProperty(PROP.ODDS_FETCH_BLOCK_ALERT_SENT_AT_MS), 0));
+  if (alertSentAtMs > 0) return;
+
+  var cfgLive = getConfig_();
+  var deliveryMode = discordDeliveryMode_(cfgLive, { allowWebhook: true });
+  if (deliveryMode.mode === "missing") {
+    log_("WARN", "Odds fetch blocker alert suppressed", {
+      reasonCode: "discord_delivery_missing",
+      blockerReasonCode: blockState.reasonCode,
+      remaining: blockState.remaining,
+      threshold: blockState.threshold,
+      unblockAt: blockState.unblockAtIso
+    });
+    return;
+  }
+
+  var payload = {
+    content:
+      "⚠️ **Odds fetch temporarily blocked (low credits)**\n" +
+      "Remaining: **" + String(blockState.remaining) + "** (threshold: " + String(blockState.threshold) + ")\n" +
+      "Unblocks at: " + String(blockState.unblockAtIso) + "\n" +
+      "Cooldown: " + String(blockState.cooldownMin) + " minutes\n" +
+      "Pipeline will continue using cached `ODDS_RAW`."
+  };
+
+  var res = sendDiscordByMode_(deliveryMode, payload);
+  if (res.http >= 200 && res.http < 300) {
+    props.setProperty(PROP.ODDS_FETCH_BLOCK_ALERT_SENT_AT_MS, String(Date.now()));
+    log_("WARN", "Odds fetch blocker alert emitted", {
+      blockerReasonCode: blockState.reasonCode,
+      remaining: blockState.remaining,
+      threshold: blockState.threshold,
+      unblockAt: blockState.unblockAtIso,
+      discordHttp: res.http,
+      discordDeliveryMode: res.deliveryMode
+    });
+    return;
+  }
+
+  log_("WARN", "Odds fetch blocker alert failed", {
+    blockerReasonCode: blockState.reasonCode,
+    remaining: blockState.remaining,
+    threshold: blockState.threshold,
+    unblockAt: blockState.unblockAtIso,
+    discordHttp: res.http,
+    discordDeliveryMode: res.deliveryMode,
+    discordBody: String(res.body || "").slice(0, 300)
+  });
+}
+
 function runPipeline(opts) {
   var options = opts || {};
   var lock = null;
@@ -981,7 +1080,25 @@ function runPipeline(opts) {
       }
     }
 
-    if (shouldRefreshOdds) oddsRes = refreshOdds_(cfg);
+    if (shouldRefreshOdds) {
+      var oddsBlockState = evaluateOddsFetchBlocker_(cfg, props, nowMs);
+      if (oddsBlockState.blocked) {
+        oddsRes.skipped = true;
+        oddsRes.skipReasonCode = "odds_fetch_blocked_low_credits";
+        oddsRes.blockUnblockAt = oddsBlockState.unblockAtIso;
+        log_("WARN", "Odds refresh blocked by low credits", {
+          reasonCode: "odds_fetch_blocked_low_credits",
+          remaining: oddsBlockState.remaining,
+          threshold: oddsBlockState.threshold,
+          creditsAtMs: oddsBlockState.creditsAtMs,
+          unblockAt: oddsBlockState.unblockAtIso,
+          cooldownMin: oddsBlockState.cooldownMin
+        });
+        maybeSendOddsFetchBlockerAlert_(cfg, oddsBlockState, props);
+      } else {
+        oddsRes = refreshOdds_(cfg);
+      }
+    }
 
     var mlbRes = refreshMLBScheduleAndLineups_(cfg, { sportKeyUsed: oddsRes.sportKeyUsed });
     refreshProjectionsIfStale_(cfg, false);

@@ -109,6 +109,7 @@ function fetchOddsData_(apiKey, cfg, sportKey, fromIso, toIso) {
     remaining: remaining,
     http: http
   });
+  persistOddsCreditsSnapshot_(remaining);
   maybeSendOddsCreditsLowAlert_(cfg, remaining, used, http, sportKey);
 
   if (http !== 200) {
@@ -120,6 +121,15 @@ function fetchOddsData_(apiKey, cfg, sportKey, fromIso, toIso) {
   catch (e) { log_("ERROR", "Odds API JSON parse failed", { message: String(e) }); return []; }
 }
 
+
+
+function persistOddsCreditsSnapshot_(remaining) {
+  if (!isFinite(Number(remaining))) return;
+  var nowMs = Date.now();
+  var props = PropertiesService.getScriptProperties();
+  props.setProperty(PROP.ODDS_LAST_REMAINING_CREDITS, String(Math.max(0, toInt_(remaining, 0))));
+  props.setProperty(PROP.ODDS_LAST_CREDITS_AT_MS, String(nowMs));
+}
 
 function parseOddsApiHeaderInt_(headers, keyLower) {
   var normalizedKey = String(keyLower || "").toLowerCase();

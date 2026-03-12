@@ -44,6 +44,8 @@ function ensureSettings_(sh) {
     ["ODDS_ALERT_REMAINING_THRESHOLD", "75", "Warn when Odds API remaining credits are <= this value"],
     ["ODDS_ALERT_COOLDOWN_MIN", "180", "Minimum minutes between low-credit alerts while remaining is low"],
     ["ODDS_ALERT_ON_EVERY_CALL_UNDER_THRESHOLD", "FALSE", "TRUE/FALSE: send warning on every low-credit call (ignores cooldown)"],
+    ["ODDS_MIN_REMAINING_TO_FETCH", "20", "Skip odds fetch when remaining credits are below this threshold"],
+    ["ODDS_FETCH_BLOCK_MIN", "120", "Cooldown minutes to skip odds fetch after low-credits block engages"],
 
     ["MATCH_TOL_MIN", "360", "Team+time match tolerance (minutes)"],
     ["LINEUP_MIN", "9", "Min hitters per lineup"],
@@ -188,6 +190,8 @@ function getConfig_() {
   cfg.ODDS_ALERT_REMAINING_THRESHOLD = Math.max(0, toInt_(cfg.ODDS_ALERT_REMAINING_THRESHOLD, 75));
   cfg.ODDS_ALERT_COOLDOWN_MIN = Math.max(0, toInt_(cfg.ODDS_ALERT_COOLDOWN_MIN, 180));
   cfg.ODDS_ALERT_ON_EVERY_CALL_UNDER_THRESHOLD = String(cfg.ODDS_ALERT_ON_EVERY_CALL_UNDER_THRESHOLD || "FALSE").toUpperCase() === "TRUE";
+  cfg.ODDS_MIN_REMAINING_TO_FETCH = Math.max(0, toInt_(cfg.ODDS_MIN_REMAINING_TO_FETCH, 20));
+  cfg.ODDS_FETCH_BLOCK_MIN = Math.max(1, toInt_(cfg.ODDS_FETCH_BLOCK_MIN, 120));
   cfg.MATCH_TOL_MIN = toInt_(cfg.MATCH_TOL_MIN, 360);
   cfg.ODDS_TEAM_MATCH_FALLBACK_ENABLE = String(cfg.ODDS_TEAM_MATCH_FALLBACK_ENABLE || "TRUE").toUpperCase() === "TRUE";
   cfg.LINEUP_MIN = toInt_(cfg.LINEUP_MIN, 9);
