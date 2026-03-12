@@ -25,6 +25,15 @@ var SH = {
 
 var LEGACY_BET_TRACKING_ALLOW_REENABLE = false;
 
+var REASON_CODE = {
+  ODDS_SKIP: "odds_skip",
+  SCHEDULE_FALLBACK: "schedule_fallback",
+  MODEL_SKIP: "model_skip",
+  NOTIFY_SKIP: "notify_skip",
+  CADENCE_CHANGE: "cadence_change",
+  BLOCKER_STATE: "blocker_state"
+};
+
 var BET_TRACKING_SHEETS = {
   BET_LOG: "BET_LOG",
   BET_EVENTS: "BET_EVENTS"

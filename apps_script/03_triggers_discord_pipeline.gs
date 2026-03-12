@@ -2,7 +2,7 @@
 
 function installTriggers() {
   var lock = LockService.getScriptLock();
-  if (!lock.tryLock(25000)) { log_("WARN", "Trigger maintenance skipped (lock busy)", { reason: "maintenance_lock_busy" }); return; }
+  if (!lock.tryLock(25000)) { log_("WARN", "Trigger maintenance skipped (lock busy)", { reason_code: REASON_CODE.BLOCKER_STATE, reason_detail: "maintenance_lock_busy" }); return; }
 
   try {
     var cfg = getConfig_();
@@ -1181,7 +1181,13 @@ function runPipeline(opts) {
   function emitRunSummary_(status) {
     runSummary.outcome = String(status || runSummary.outcome || "unknown");
     runSummary.duration_ms = Math.max(0, Date.now() - Date.parse(runSummary.started_at));
-    log_("INFO", "runPipeline summary", runSummary);
+    if (runSummary.outcome !== "ok") {
+      var blockerDetail = (runSummary.reason_codes && runSummary.reason_codes.blockers || []).join(",");
+      var skipDetail = (runSummary.reason_codes && runSummary.reason_codes.skips || []).join(",");
+      runSummary.reason_code = blockerDetail ? REASON_CODE.BLOCKER_STATE : REASON_CODE.ODDS_SKIP;
+      runSummary.reason_detail = blockerDetail || skipDetail || runSummary.outcome;
+    }
+    log_(runSummary.outcome === "ok" ? "INFO" : "WARN", "runPipeline summary", runSummary);
   }
 
   if (!options.skipLock) {
@@ -1192,7 +1198,7 @@ function runPipeline(opts) {
       runSummary.stages.model.outcome = "skipped";
       runSummary.stages.signal.outcome = "skipped";
       addReasonCode_("skips", "lock_busy");
-      log_("WARN", "Pipeline skipped (lock busy)", {});
+      log_("WARN", "Pipeline skipped (lock busy)", { reason_code: REASON_CODE.BLOCKER_STATE, reason_detail: "lock_busy" });
       emitRunSummary_("skipped");
       return;
     }
@@ -1236,7 +1242,7 @@ function runPipeline(opts) {
       props.setProperty(PROP.LAST_PIPELINE_AT, startedUtc);
       props.setProperty(PROP.LAST_PIPELINE_STATUS, "SKIPPED_OUTSIDE_WINDOW");
       props.setProperty(PROP.LAST_PIPELINE_SUMMARY, "outside active window");
-      log_("INFO", "Pipeline skipped (outside active window)", { activeStart: cfg.ACTIVE_START, activeEnd: cfg.ACTIVE_END });
+      log_("INFO", "Pipeline skipped (outside active window)", { reason_code: REASON_CODE.ODDS_SKIP, reason_detail: "outside_active_window", activeStart: cfg.ACTIVE_START, activeEnd: cfg.ACTIVE_END });
       emitRunSummary_("skipped");
       return;
     }
@@ -1319,7 +1325,8 @@ function runPipeline(opts) {
         oddsRes.blockUnblockAt = oddsBlockState.unblockAtIso;
         addReasonCode_("blockers", oddsRes.skipReasonCode);
         log_("WARN", "Odds refresh blocked by low credits", {
-          reasonCode: oddsBlockState.reasonCode || "credits_snapshot_fresh_blocked",
+          reason_code: REASON_CODE.BLOCKER_STATE,
+          reason_detail: oddsBlockState.reasonCode || "credits_snapshot_fresh_blocked",
           remaining: oddsBlockState.remaining,
           threshold: oddsBlockState.threshold,
           creditsAtMs: oddsBlockState.creditsAtMs,
@@ -1335,7 +1342,8 @@ function runPipeline(opts) {
         if (oddsBlockState.reasonCode === "credits_snapshot_stale_probe_fetch") {
           addReasonCode_("blockers", oddsBlockState.reasonCode);
           log_("INFO", "Odds refresh probe allowed due to stale credit snapshot", {
-            reasonCode: oddsBlockState.reasonCode,
+            reason_code: REASON_CODE.BLOCKER_STATE,
+            reason_detail: oddsBlockState.reasonCode,
             remaining: oddsBlockState.remaining,
             threshold: oddsBlockState.threshold,
             creditsAtMs: oddsBlockState.creditsAtMs,
