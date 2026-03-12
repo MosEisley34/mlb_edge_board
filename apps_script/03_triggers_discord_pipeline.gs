@@ -946,22 +946,48 @@ function updatePipelineCadenceState_(cfg, props, matchedCount, computedCount) {
 function evaluateOddsFetchBlocker_(cfg, props, nowMs) {
   var threshold = Math.max(0, toInt_(cfg.ODDS_MIN_REMAINING_TO_FETCH, 20));
   var cooldownMin = Math.max(1, toInt_(cfg.ODDS_FETCH_BLOCK_MIN, 120));
+  var creditsSnapshotMaxAgeMin = Math.max(1, toInt_(cfg.ODDS_CREDITS_SNAPSHOT_MAX_AGE_MIN, 180));
   var remainingRaw = props.getProperty(PROP.ODDS_LAST_REMAINING_CREDITS);
   var remaining = isFinite(Number(remainingRaw)) ? Math.max(0, toInt_(remainingRaw, 0)) : null;
   var creditsAtMs = Math.max(0, toInt_(props.getProperty(PROP.ODDS_LAST_CREDITS_AT_MS), 0));
   var existingUntilMs = Math.max(0, toInt_(props.getProperty(PROP.ODDS_FETCH_BLOCK_UNTIL_MS), 0));
+  var snapshotAgeMs = creditsAtMs > 0 ? Math.max(0, nowMs - creditsAtMs) : -1;
+  var snapshotFresh = creditsAtMs > 0 && snapshotAgeMs <= (creditsSnapshotMaxAgeMin * 60000);
+
+  if (!snapshotFresh) {
+    if (existingUntilMs > 0) {
+      props.deleteProperty(PROP.ODDS_FETCH_BLOCK_UNTIL_MS);
+      props.deleteProperty(PROP.ODDS_FETCH_BLOCK_ALERT_SENT_AT_MS);
+    }
+
+    return {
+      blocked: false,
+      engagedNow: false,
+      reasonCode: "credits_snapshot_stale_probe_fetch",
+      remaining: remaining,
+      creditsAtMs: creditsAtMs,
+      threshold: threshold,
+      cooldownMin: cooldownMin,
+      creditsSnapshotMaxAgeMin: creditsSnapshotMaxAgeMin,
+      snapshotAgeMs: snapshotAgeMs,
+      snapshotFresh: false
+    };
+  }
 
   if (existingUntilMs > nowMs) {
     return {
       blocked: true,
       engagedNow: false,
-      reasonCode: "odds_fetch_blocked_low_credits",
+      reasonCode: "credits_snapshot_fresh_blocked",
       remaining: remaining,
       creditsAtMs: creditsAtMs,
       threshold: threshold,
       unblockAtMs: existingUntilMs,
       unblockAtIso: new Date(existingUntilMs).toISOString(),
-      cooldownMin: cooldownMin
+      cooldownMin: cooldownMin,
+      creditsSnapshotMaxAgeMin: creditsSnapshotMaxAgeMin,
+      snapshotAgeMs: snapshotAgeMs,
+      snapshotFresh: true
     };
   }
 
@@ -971,7 +997,17 @@ function evaluateOddsFetchBlocker_(cfg, props, nowMs) {
   }
 
   if (remaining === null || remaining >= threshold) {
-    return { blocked: false, engagedNow: false, remaining: remaining, threshold: threshold, cooldownMin: cooldownMin, creditsAtMs: creditsAtMs };
+    return {
+      blocked: false,
+      engagedNow: false,
+      remaining: remaining,
+      threshold: threshold,
+      cooldownMin: cooldownMin,
+      creditsAtMs: creditsAtMs,
+      creditsSnapshotMaxAgeMin: creditsSnapshotMaxAgeMin,
+      snapshotAgeMs: snapshotAgeMs,
+      snapshotFresh: true
+    };
   }
 
   var unblockAtMs = nowMs + (cooldownMin * 60000);
@@ -979,13 +1015,16 @@ function evaluateOddsFetchBlocker_(cfg, props, nowMs) {
   return {
     blocked: true,
     engagedNow: true,
-    reasonCode: "odds_fetch_blocked_low_credits",
+    reasonCode: "credits_snapshot_fresh_blocked",
     remaining: remaining,
     creditsAtMs: creditsAtMs,
     threshold: threshold,
     unblockAtMs: unblockAtMs,
     unblockAtIso: new Date(unblockAtMs).toISOString(),
-    cooldownMin: cooldownMin
+    cooldownMin: cooldownMin,
+    creditsSnapshotMaxAgeMin: creditsSnapshotMaxAgeMin,
+    snapshotAgeMs: snapshotAgeMs,
+    snapshotFresh: true
   };
 }
 
@@ -1134,18 +1173,32 @@ function runPipeline(opts) {
       var oddsBlockState = evaluateOddsFetchBlocker_(cfg, props, nowMs);
       if (oddsBlockState.blocked) {
         oddsRes.skipped = true;
-        oddsRes.skipReasonCode = "odds_fetch_blocked_low_credits";
+        oddsRes.skipReasonCode = oddsBlockState.reasonCode || "credits_snapshot_fresh_blocked";
         oddsRes.blockUnblockAt = oddsBlockState.unblockAtIso;
         log_("WARN", "Odds refresh blocked by low credits", {
-          reasonCode: "odds_fetch_blocked_low_credits",
+          reasonCode: oddsBlockState.reasonCode || "credits_snapshot_fresh_blocked",
           remaining: oddsBlockState.remaining,
           threshold: oddsBlockState.threshold,
           creditsAtMs: oddsBlockState.creditsAtMs,
+          snapshotAgeMs: oddsBlockState.snapshotAgeMs,
+          snapshotFresh: oddsBlockState.snapshotFresh,
+          creditsSnapshotMaxAgeMin: oddsBlockState.creditsSnapshotMaxAgeMin,
           unblockAt: oddsBlockState.unblockAtIso,
           cooldownMin: oddsBlockState.cooldownMin
         });
         maybeSendOddsFetchBlockerAlert_(cfg, oddsBlockState, props);
       } else {
+        if (oddsBlockState.reasonCode === "credits_snapshot_stale_probe_fetch") {
+          log_("INFO", "Odds refresh probe allowed due to stale credit snapshot", {
+            reasonCode: oddsBlockState.reasonCode,
+            remaining: oddsBlockState.remaining,
+            threshold: oddsBlockState.threshold,
+            creditsAtMs: oddsBlockState.creditsAtMs,
+            snapshotAgeMs: oddsBlockState.snapshotAgeMs,
+            snapshotFresh: oddsBlockState.snapshotFresh,
+            creditsSnapshotMaxAgeMin: oddsBlockState.creditsSnapshotMaxAgeMin
+          });
+        }
         oddsRes = refreshOdds_(cfg);
       }
     }
