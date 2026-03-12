@@ -115,6 +115,8 @@ function resetWorkbook() {
   props.deleteProperty(PROP.PIPELINE_TRIGGER_SIGNATURE);
   props.deleteProperty(PROP.PIPELINE_RUN_DEBOUNCE_UNTIL_MS);
   props.deleteProperty(PROP.PIPELINE_DUPLICATE_RUN_PREVENTED);
+  props.deleteProperty(PROP.SIGNAL_CLOSE_UPDATER_CADENCE_MINUTES);
+  props.deleteProperty(PROP.SIGNAL_CLOSE_UPDATER_TRIGGER_SIGNATURE);
   props.deleteProperty(PROP.LAST_HEARTBEAT_KEY);
   props.deleteProperty(PROP.ODDS_WINDOW_CACHE);
   props.deleteProperty(PROP.ODDS_ALERT_LAST_SENT_AT_MS);
