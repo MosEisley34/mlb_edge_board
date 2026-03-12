@@ -22,6 +22,12 @@ function ensureSettings_(sh) {
     ["PIPELINE_CREDIT_CRITICAL_THRESHOLD", "25", "Apply very slow cadence when remaining credits are near depletion"],
     ["PIPELINE_DEGRADE_MINUTES_CREDIT_WARNING", "30", "Pipeline cadence minutes while credit pressure warning is active"],
     ["PIPELINE_DEGRADE_MINUTES_CREDIT_CRITICAL", "60", "Pipeline cadence minutes while credit pressure is critical"],
+    ["PIPELINE_STAGE_WARN_SEC", "20", "Warn when a pipeline stage takes longer than this many seconds"],
+    ["PIPELINE_STAGE_WARN_ODDS_FETCH_SEC", "30", "Warn when odds fetch stage exceeds this many seconds"],
+    ["PIPELINE_STAGE_WARN_MODEL_SEC", "30", "Warn when model stage exceeds this many seconds"],
+    ["PIPELINE_STAGE_DURATION_EMA_ALPHA", "0.2", "EMA alpha (0-1] for per-stage duration moving averages"],
+    ["PIPELINE_STAGE_DRIFT_SPIKE_MULTIPLIER", "2.0", "Drift spike when duration exceeds moving average by this multiplier"],
+    ["PIPELINE_STAGE_DRIFT_SPIKE_MIN_MS", "5000", "Minimum absolute ms over moving average to classify as drift spike"],
 
     ["HEARTBEAT_MODE", "DAILY", "OFF / DAILY / HOURLY"],
     ["HEARTBEAT_HOUR", "9", "Daily heartbeat hour (script timezone)"],
@@ -180,6 +186,12 @@ function getConfig_() {
   cfg.PIPELINE_CREDIT_CRITICAL_THRESHOLD = Math.max(0, toInt_(cfg.PIPELINE_CREDIT_CRITICAL_THRESHOLD, 25));
   cfg.PIPELINE_DEGRADE_MINUTES_CREDIT_WARNING = toInt_(cfg.PIPELINE_DEGRADE_MINUTES_CREDIT_WARNING, 30);
   cfg.PIPELINE_DEGRADE_MINUTES_CREDIT_CRITICAL = toInt_(cfg.PIPELINE_DEGRADE_MINUTES_CREDIT_CRITICAL, 60);
+  cfg.PIPELINE_STAGE_WARN_SEC = Math.max(1, toFloat_(cfg.PIPELINE_STAGE_WARN_SEC, 20));
+  cfg.PIPELINE_STAGE_WARN_ODDS_FETCH_SEC = Math.max(1, toFloat_(cfg.PIPELINE_STAGE_WARN_ODDS_FETCH_SEC, 30));
+  cfg.PIPELINE_STAGE_WARN_MODEL_SEC = Math.max(1, toFloat_(cfg.PIPELINE_STAGE_WARN_MODEL_SEC, 30));
+  cfg.PIPELINE_STAGE_DURATION_EMA_ALPHA = clamp_(0.01, 1, toFloat_(cfg.PIPELINE_STAGE_DURATION_EMA_ALPHA, 0.2));
+  cfg.PIPELINE_STAGE_DRIFT_SPIKE_MULTIPLIER = Math.max(1.1, toFloat_(cfg.PIPELINE_STAGE_DRIFT_SPIKE_MULTIPLIER, 2.0));
+  cfg.PIPELINE_STAGE_DRIFT_SPIKE_MIN_MS = Math.max(500, toInt_(cfg.PIPELINE_STAGE_DRIFT_SPIKE_MIN_MS, 5000));
   cfg.HEARTBEAT_MODE = String(cfg.HEARTBEAT_MODE || "DAILY").toUpperCase();
   cfg.HEARTBEAT_HOUR = toInt_(cfg.HEARTBEAT_HOUR, 9);
   cfg.HEARTBEAT_MINUTE = toInt_(cfg.HEARTBEAT_MINUTE, 5);

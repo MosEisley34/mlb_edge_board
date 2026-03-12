@@ -78,6 +78,8 @@ Switch back to `ODDS_USAGE_PROFILE=NORMAL` when credits are healthy.
 - `stages.signal.outcome`
 - `reason_codes.skips` (array; can be empty)
 - `reason_codes.blockers` (array; can be empty)
+- `reason_codes.warnings` (array; can be empty)
+- `stage_durations_ms` (per-stage duration map in milliseconds)
 
 ### Optional fields (present when available/applicable)
 - `mode.app_mode`, `mode.active_start`, `mode.active_end`
@@ -88,6 +90,8 @@ Switch back to `ODDS_USAGE_PROFILE=NORMAL` when credits are healthy.
   - `stages.schedule.matched_count`, `stages.schedule.expanded_window_fallback_used`, `stages.schedule.rejection_summary`
   - `stages.model.computed`, `stages.model.lineup_fallback_used`, `stages.model.lineup_fallback_games`
   - `stages.signal.bet_signals_found`
+  - timing envelopes for `stages.odds_window_resolve`, `stages.odds_fetch`, `stages.schedule_lineups`, `stages.projections`, `stages.model`, `stages.notifications`, and `stages.calibration_snapshot_write` (`started_at`, `ended_at`, `duration_ms`)
+- `performance.stage_duration_drift_spikes` (emitted only when stage duration drift exceeds configured moving-average thresholds)
 - `error_message` (error runs only)
 
 ### Canonical `reason_code` enums (machine-first)
@@ -107,6 +111,7 @@ Non-happy path logs/events now use a canonical `reason_code` and optional `reaso
 ### Reason code buckets
 - `reason_codes.skips`: skip reasons (for example `outside_active_window`, `debounce_active`, `odds_outside_computed_window`).
 - `reason_codes.blockers`: blocking/degraded reasons (for example `credits_snapshot_fresh_blocked`, `schedule_window_fetch_error`, `pipeline_exception`).
+- `reason_codes.warnings`: non-blocking performance warnings (for example `stage_model_duration_warn`, `stage_odds_fetch_drift_spike`).
 
 ## Legacy bet tracking deprecation
 - Legacy bet tracking flows are retired by default.
