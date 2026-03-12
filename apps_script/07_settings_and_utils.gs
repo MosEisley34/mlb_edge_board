@@ -28,6 +28,10 @@ function ensureSettings_(sh) {
     ["ODDS_SPORT_KEY_OVERRIDE", "", "Optional override key"],
 
     ["ODDS_REGIONS", "us,us2", "Recommended: us,us2 for better coverage"],
+    ["ODDS_USAGE_PROFILE", "NORMAL", "NORMAL or LOW_CREDIT"],
+    ["ODDS_LOW_CREDIT_REGIONS", "us", "LOW_CREDIT override for ODDS_REGIONS"],
+    ["ODDS_LOW_CREDIT_LOOKAHEAD_HOURS", "12", "LOW_CREDIT override for ODDS_LOOKAHEAD_HOURS (recommended 12-18)"],
+    ["ODDS_LOW_CREDIT_BOOKMAKERS", "", "Optional LOW_CREDIT bookmakers CSV passed via bookmakers="],
     ["ODDS_MARKETS", "h2h", "Moneyline = h2h"],
     ["ODDS_FORMAT", "decimal", ""],
     ["ODDS_DATE_FORMAT", "iso", ""],
@@ -174,6 +178,11 @@ function getConfig_() {
   cfg.ODDS_SPORT_KEY_REGULAR = String(cfg.ODDS_SPORT_KEY_REGULAR || "baseball_mlb");
   cfg.ODDS_SPORT_KEY_OVERRIDE = String(cfg.ODDS_SPORT_KEY_OVERRIDE || "").trim();
   cfg.ODDS_REGIONS = String(cfg.ODDS_REGIONS || "us,us2");
+  cfg.ODDS_USAGE_PROFILE = String(cfg.ODDS_USAGE_PROFILE || "NORMAL").toUpperCase();
+  if (cfg.ODDS_USAGE_PROFILE !== "LOW_CREDIT") cfg.ODDS_USAGE_PROFILE = "NORMAL";
+  cfg.ODDS_LOW_CREDIT_REGIONS = String(cfg.ODDS_LOW_CREDIT_REGIONS || "us").trim();
+  cfg.ODDS_LOW_CREDIT_LOOKAHEAD_HOURS = Math.max(1, toFloat_(cfg.ODDS_LOW_CREDIT_LOOKAHEAD_HOURS, 12));
+  cfg.ODDS_LOW_CREDIT_BOOKMAKERS = String(cfg.ODDS_LOW_CREDIT_BOOKMAKERS || "").trim();
   cfg.ODDS_MARKETS = String(cfg.ODDS_MARKETS || "h2h");
   cfg.ODDS_FORMAT = String(cfg.ODDS_FORMAT || "decimal");
   cfg.ODDS_DATE_FORMAT = String(cfg.ODDS_DATE_FORMAT || "iso");
