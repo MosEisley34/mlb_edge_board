@@ -1142,11 +1142,60 @@ function maybeSendOddsFetchBlockerAlert_(cfg, blockState, props) {
 
 function runPipeline(opts) {
   var options = opts || {};
+  var runId = [String(Date.now()), Math.floor(Math.random() * 1000000)].join("-");
   var lock = null;
   var hasLock = false;
+  var runSummary = {
+    summary_schema_version: "1.0.0",
+    run_id: runId,
+    started_at: new Date().toISOString(),
+    duration_ms: 0,
+    outcome: "unknown",
+    mode: {
+      trigger_source: String(options.source || "scheduled")
+    },
+    stages: {
+      odds: { outcome: "not_started" },
+      schedule: { outcome: "not_started" },
+      model: { outcome: "not_started" },
+      signal: { outcome: "not_started" }
+    },
+    cadence: null,
+    credit_state: null,
+    reason_codes: {
+      skips: [],
+      blockers: []
+    }
+  };
+
+  function addReasonCode_(bucket, code) {
+    if (!code) return;
+    var key = String(bucket || "");
+    if (!runSummary.reason_codes[key]) runSummary.reason_codes[key] = [];
+    var target = runSummary.reason_codes[key];
+    var normalized = String(code);
+    for (var i = 0; i < target.length; i++) if (String(target[i]) === normalized) return;
+    target.push(normalized);
+  }
+
+  function emitRunSummary_(status) {
+    runSummary.outcome = String(status || runSummary.outcome || "unknown");
+    runSummary.duration_ms = Math.max(0, Date.now() - Date.parse(runSummary.started_at));
+    log_("INFO", "runPipeline summary", runSummary);
+  }
+
   if (!options.skipLock) {
     lock = LockService.getScriptLock();
-    if (!lock.tryLock(25000)) { log_("WARN", "Pipeline skipped (lock busy)", {}); return; }
+    if (!lock.tryLock(25000)) {
+      runSummary.stages.odds.outcome = "skipped";
+      runSummary.stages.schedule.outcome = "skipped";
+      runSummary.stages.model.outcome = "skipped";
+      runSummary.stages.signal.outcome = "skipped";
+      addReasonCode_("skips", "lock_busy");
+      log_("WARN", "Pipeline skipped (lock busy)", {});
+      emitRunSummary_("skipped");
+      return;
+    }
     hasLock = true;
   }
 
@@ -1154,25 +1203,41 @@ function runPipeline(opts) {
   var nowMs = Date.now();
   var debounce = pipelineDebounceState_(props, nowMs);
   var startedUtc = new Date(nowMs).toISOString();
+  runSummary.started_at = startedUtc;
 
   if (debounce.active) {
+    runSummary.stages.odds.outcome = "skipped";
+    runSummary.stages.schedule.outcome = "skipped";
+    runSummary.stages.model.outcome = "skipped";
+    runSummary.stages.signal.outcome = "skipped";
+    addReasonCode_("skips", "debounce_active");
     registerDuplicateRunPrevented_(props, "SKIPPED_DEBOUNCE_ACTIVE", {
       triggerPath: String(options.source || "scheduled"),
       debounceUntil: debounce.untilIso,
       remainingMs: debounce.remainingMs
     });
+    emitRunSummary_("skipped");
     if (hasLock && lock) lock.releaseLock();
     return;
   }
 
   try {
     var cfg = options.cfgOverride || getConfig_();
+    runSummary.mode.app_mode = String(cfg.MODE || "PRESEASON").toUpperCase();
+    runSummary.mode.active_start = cfg.ACTIVE_START;
+    runSummary.mode.active_end = cfg.ACTIVE_END;
 
     if (!withinActiveHours_(cfg)) {
+      runSummary.stages.odds.outcome = "skipped";
+      runSummary.stages.schedule.outcome = "skipped";
+      runSummary.stages.model.outcome = "skipped";
+      runSummary.stages.signal.outcome = "skipped";
+      addReasonCode_("skips", "outside_active_window");
       props.setProperty(PROP.LAST_PIPELINE_AT, startedUtc);
       props.setProperty(PROP.LAST_PIPELINE_STATUS, "SKIPPED_OUTSIDE_WINDOW");
       props.setProperty(PROP.LAST_PIPELINE_SUMMARY, "outside active window");
       log_("INFO", "Pipeline skipped (outside active window)", { activeStart: cfg.ACTIVE_START, activeEnd: cfg.ACTIVE_END });
+      emitRunSummary_("skipped");
       return;
     }
 
@@ -1185,8 +1250,10 @@ function runPipeline(opts) {
     var nowLocal = new Date();
 
     if (oddsWindow && oddsWindow.hasGames) {
+      runSummary.stages.schedule.outcome = "ok";
       shouldRefreshOdds = nowLocal.getTime() >= oddsWindow.windowStart.getTime() && nowLocal.getTime() <= oddsWindow.windowEnd.getTime();
       if (!shouldRefreshOdds) {
+        addReasonCode_("skips", "odds_outside_computed_window");
         log_("INFO", "Odds refresh skipped: outside computed window", {
           nowLocal: isoLocalWithOffset_(nowLocal),
           firstGameLocal: oddsWindow.firstGameLocalIso,
@@ -1198,10 +1265,12 @@ function runPipeline(opts) {
         });
       }
     } else if (oddsWindow && !oddsWindow.hasGames) {
+      runSummary.stages.schedule.outcome = "ok";
       var noGamesBehavior = String(cfg.ODDS_NO_GAMES_BEHAVIOR || "SKIP").toUpperCase();
       if (noGamesBehavior === "FALLBACK_STATIC_WINDOW") {
         shouldRefreshOdds = withinActiveHours_(cfg);
         if (!shouldRefreshOdds) {
+          addReasonCode_("skips", "no_games_outside_static_window");
           log_("INFO", "Odds refresh skipped: no games today + outside static window", {
             behavior: noGamesBehavior,
             activeStart: cfg.ACTIVE_START,
@@ -1211,6 +1280,7 @@ function runPipeline(opts) {
           });
         }
       } else {
+        addReasonCode_("skips", "no_games_today");
         log_("INFO", "Odds refresh skipped: no games today", {
           behavior: noGamesBehavior,
           scheduleDateLocal: oddsWindow.scheduleDateLocal,
@@ -1218,8 +1288,11 @@ function runPipeline(opts) {
         });
       }
     } else {
+      runSummary.stages.schedule.outcome = "error";
+      addReasonCode_("blockers", "schedule_window_fetch_error");
       shouldRefreshOdds = withinActiveHours_(cfg);
       if (!shouldRefreshOdds) {
+        addReasonCode_("skips", "schedule_fetch_error_outside_static_window");
         log_("INFO", "Odds refresh skipped: schedule fetch error + outside static window", {
           activeStart: cfg.ACTIVE_START,
           activeEnd: cfg.ACTIVE_END,
@@ -1231,10 +1304,20 @@ function runPipeline(opts) {
 
     if (shouldRefreshOdds) {
       var oddsBlockState = evaluateOddsFetchBlocker_(cfg, props, nowMs);
+      runSummary.credit_state = {
+        remaining_credits: oddsBlockState.remaining,
+        threshold: oddsBlockState.threshold,
+        snapshot_fresh: oddsBlockState.snapshotFresh,
+        snapshot_age_ms: oddsBlockState.snapshotAgeMs,
+        credits_at_ms: oddsBlockState.creditsAtMs,
+        cooldown_min: oddsBlockState.cooldownMin
+      };
       if (oddsBlockState.blocked) {
+        runSummary.stages.odds.outcome = "blocked";
         oddsRes.skipped = true;
         oddsRes.skipReasonCode = oddsBlockState.reasonCode || "credits_snapshot_fresh_blocked";
         oddsRes.blockUnblockAt = oddsBlockState.unblockAtIso;
+        addReasonCode_("blockers", oddsRes.skipReasonCode);
         log_("WARN", "Odds refresh blocked by low credits", {
           reasonCode: oddsBlockState.reasonCode || "credits_snapshot_fresh_blocked",
           remaining: oddsBlockState.remaining,
@@ -1248,7 +1331,9 @@ function runPipeline(opts) {
         });
         maybeSendOddsFetchBlockerAlert_(cfg, oddsBlockState, props);
       } else {
+        runSummary.stages.odds.outcome = "ok";
         if (oddsBlockState.reasonCode === "credits_snapshot_stale_probe_fetch") {
+          addReasonCode_("blockers", oddsBlockState.reasonCode);
           log_("INFO", "Odds refresh probe allowed due to stale credit snapshot", {
             reasonCode: oddsBlockState.reasonCode,
             remaining: oddsBlockState.remaining,
@@ -1261,12 +1346,37 @@ function runPipeline(opts) {
         }
         oddsRes = refreshOdds_(cfg);
       }
+    } else {
+      runSummary.stages.odds.outcome = "skipped";
     }
 
+    if (runSummary.stages.schedule.outcome === "not_started") runSummary.stages.schedule.outcome = "ok";
+
     var mlbRes = refreshMLBScheduleAndLineups_(cfg, { sportKeyUsed: oddsRes.sportKeyUsed });
+    runSummary.stages.schedule.outcome = "ok";
     refreshProjectionsIfStale_(cfg, false);
     var modelRes = refreshModelAndEdge_(cfg, mlbRes);
+    runSummary.stages.model.outcome = "ok";
+    runSummary.stages.signal.outcome = "ok";
     var cadenceState = updatePipelineCadenceState_(cfg, props, mlbRes.matchedCount, modelRes.computed);
+    runSummary.cadence = {
+      mode: cadenceState.mode,
+      reason: cadenceState.reason,
+      cadence_minutes: cadenceState.cadenceMinutes,
+      zero_streak: cadenceState.zeroStreak,
+      zero_data_run: cadenceState.zeroDataRun
+    };
+    runSummary.credit_state = runSummary.credit_state || {};
+    runSummary.credit_state.remaining_credits = cadenceState.remainingCredits;
+    runSummary.credit_state.credit_pressure_level = cadenceState.creditPressureLevel;
+    runSummary.stages.odds.games = oddsRes.games;
+    runSummary.stages.schedule.matched_count = mlbRes.matchedCount;
+    runSummary.stages.schedule.expanded_window_fallback_used = !!mlbRes.expandedWindowFallbackUsed;
+    runSummary.stages.schedule.rejection_summary = mlbRes.rejectionSummary || {};
+    runSummary.stages.model.computed = modelRes.computed;
+    runSummary.stages.model.lineup_fallback_used = !!modelRes.lineupFallbackUsed;
+    runSummary.stages.model.lineup_fallback_games = modelRes.lineupFallbackGames || 0;
+    runSummary.stages.signal.bet_signals_found = modelRes.betSignalsFound;
 
     var rejectionSummaryText = JSON.stringify(mlbRes.rejectionSummary || {});
     var fullSummary = "odds=" + oddsRes.games + " matched=" + mlbRes.matchedCount + " computed=" + modelRes.computed + " bets=" + modelRes.betSignalsFound + " cadenceMode=" + cadenceState.mode + " cadenceReason=" + cadenceState.reason + " cadenceMin=" + cadenceState.cadenceMinutes + " zeroStreak=" + cadenceState.zeroStreak + " lineupFallbackUsed=" + (modelRes.lineupFallbackUsed ? "Y" : "N") + " lineupFallbackGames=" + (modelRes.lineupFallbackGames || 0) + " weatherApplied=" + (modelRes.weatherAppliedGames || 0) + " bullpenApplied=" + (modelRes.bullpenFeatureAppliedGames || 0) + " experimentalApplied=" + (modelRes.experimentalAppliedGames || 0) + " expandedWindowFallback=" + (mlbRes.expandedWindowFallbackUsed ? "Y" : "N") + " rejects=" + rejectionSummaryText;
@@ -1296,11 +1406,19 @@ function runPipeline(opts) {
     } else {
       log_("INFO", "runPipeline completed", { odds: oddsRes.games, matched: mlbRes.matchedCount, computed: modelRes.computed, betSignalsFound: modelRes.betSignalsFound, cadenceMode: cadenceState.mode, cadenceReason: cadenceState.reason, cadenceMinutes: cadenceState.cadenceMinutes, zeroStreak: cadenceState.zeroStreak, lineupFallbackMode: modelRes.lineupFallbackMode, lineupFallbackUsed: modelRes.lineupFallbackUsed, lineupFallbackGames: modelRes.lineupFallbackGames, weatherAppliedGames: modelRes.weatherAppliedGames || 0, bullpenFeatureAppliedGames: modelRes.bullpenFeatureAppliedGames || 0, experimentalAppliedGames: modelRes.experimentalAppliedGames || 0, externalFeatureFetchLogs: modelRes.externalFeatureFetchLogs || [], expandedWindowFallbackUsed: !!mlbRes.expandedWindowFallbackUsed, rejectionSummary: mlbRes.rejectionSummary || {}, runStateTransitioned: runState.transitioned, runStateRepeatCount: runState.repeatCount, runStateHeartbeatDue: runState.heartbeatDue, runStateSignature: runState.signature });
     }
+    emitRunSummary_("ok");
   } catch (e) {
+    runSummary.stages.odds.outcome = (runSummary.stages.odds.outcome === "not_started") ? "error" : runSummary.stages.odds.outcome;
+    runSummary.stages.schedule.outcome = (runSummary.stages.schedule.outcome === "not_started") ? "error" : runSummary.stages.schedule.outcome;
+    runSummary.stages.model.outcome = (runSummary.stages.model.outcome === "not_started") ? "error" : runSummary.stages.model.outcome;
+    runSummary.stages.signal.outcome = (runSummary.stages.signal.outcome === "not_started") ? "error" : runSummary.stages.signal.outcome;
+    addReasonCode_("blockers", "pipeline_exception");
+    runSummary.error_message = String(e);
     props.setProperty(PROP.LAST_PIPELINE_AT, startedUtc);
     props.setProperty(PROP.LAST_PIPELINE_STATUS, "ERROR");
     props.setProperty(PROP.LAST_PIPELINE_SUMMARY, String(e));
     log_("ERROR", "runPipeline error", { message: String(e), stack: (e && e.stack) ? String(e.stack) : "" });
+    emitRunSummary_("error");
     throw e;
   } finally {
     setPipelineDebounceForMs_(props, 45000, "pipeline_run_completed");
