@@ -1,4 +1,4 @@
-/* ===================== BET LOG + SECURE ACTIONS ===================== */
+/* ===================== ACTION ROUTING + OPTIONAL LEGACY BET TRACKING ===================== */
 
 function doGet(e) {
   return handleBetActionGet_(e && e.parameter ? e.parameter : {});
@@ -25,7 +25,7 @@ function renderActionTestPage_(p) {
     "<p>✅ Discord button + web app routing works.</p>" +
     "<p><b>Local:</b> " + htmlEscape_(localNow) + "</p>" +
     "<p><b>Token:</b> <code>" + htmlEscape_(token || "(none)") + "</code></p>" +
-    "<p>This endpoint is test-only and does not write to BET_LOG or BET_EVENTS.</p>"
+    "<p>This endpoint is test-only and does not write to legacy tracking sheets.</p>"
   );
 }
 
@@ -51,7 +51,7 @@ function handleBetActionPost_(p) {
 }
 
 function createPendingBet_(cfg, args) {
-  var sh = SpreadsheetApp.getActive().getSheetByName(SH.BET_LOG);
+  var sh = SpreadsheetApp.getActive().getSheetByName(BET_TRACKING_SHEETS.BET_LOG);
   if (!sh) return "";
 
   var betId = Utilities.getUuid();
@@ -95,7 +95,7 @@ function createPendingBet_(cfg, args) {
 }
 
 function appendBetEvent_(betId, eventName, fromStatus, toStatus, detailObj) {
-  var sh = SpreadsheetApp.getActive().getSheetByName(SH.BET_EVENTS);
+  var sh = SpreadsheetApp.getActive().getSheetByName(BET_TRACKING_SHEETS.BET_EVENTS);
   if (!sh) return;
   var detail = detailObj ? JSON.stringify(detailObj) : "";
   if (detail.length > 1800) detail = detail.slice(0, 1800) + "…(trimmed)";
@@ -175,7 +175,7 @@ function consumeNonce_(nonce) {
 }
 
 function findBetRowById_(betId) {
-  var sh = SpreadsheetApp.getActive().getSheetByName(SH.BET_LOG);
+  var sh = SpreadsheetApp.getActive().getSheetByName(BET_TRACKING_SHEETS.BET_LOG);
   if (!sh) return null;
   var v = sh.getDataRange().getValues();
   if (!v || v.length < 2) return null;
@@ -299,9 +299,10 @@ function renderConfirmPlacedForm_(p) {
 }
 
 function renderPendingHelp_() {
-  var body = '<p>Open the <b>BET_LOG</b> sheet and filter <code>status = PENDING</code>.</p>' +
+  var body = '<p>This endpoint supports optional legacy workflow actions.</p>' +
+    '<p>If legacy tracking is enabled, open <b>' + htmlEscape_(BET_TRACKING_SHEETS.BET_LOG) + '</b> and filter <code>status = PENDING</code>.</p>' +
     '<p>Use Discord links to confirm placement and mark outcomes.</p>';
-  return renderHtmlPage_("Pending Bets", body);
+  return renderHtmlPage_("Pending Actions", body);
 }
 
 function renderHtmlPage_(title, bodyHtml) {

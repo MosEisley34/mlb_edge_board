@@ -70,6 +70,7 @@ function ensureSettings_(sh) {
     ["NOTIFY_COOLDOWN_MIN", "60", "Minimum minutes between Discord sends for the same odds_game_id"],
     ["NOTIFY_MIN_ODDS_MOVE", "0.03", "Minimum decimal odds change required to re-notify"],
     ["NOTIFY_MIN_EDGE_MOVE_PCT", "0.75", "Minimum edge change (percentage points) required to re-notify"],
+    ["ENABLE_BET_TRACKING", "FALSE", "TRUE/FALSE: keep legacy BET_LOG and BET_EVENTS workflows enabled"],
 
     ["EXT_FEATURES_ENABLE_WEATHER", "FALSE", "Enable weather external feature ingestion"],
     ["EXT_FEATURES_ENABLE_BULLPEN", "FALSE", "Enable bullpen external feature ingestion"],
@@ -207,6 +208,7 @@ function getConfig_() {
   cfg.NOTIFY_COOLDOWN_MIN = toFloat_(cfg.NOTIFY_COOLDOWN_MIN, 60);
   cfg.NOTIFY_MIN_ODDS_MOVE = toFloat_(cfg.NOTIFY_MIN_ODDS_MOVE, 0.03);
   cfg.NOTIFY_MIN_EDGE_MOVE_PCT = toFloat_(cfg.NOTIFY_MIN_EDGE_MOVE_PCT, 0.75);
+  cfg.ENABLE_BET_TRACKING = String(cfg.ENABLE_BET_TRACKING || "FALSE").toUpperCase() === "TRUE";
   cfg.CALIBRATION_WINDOW_DAYS = Math.max(7, toInt_(cfg.CALIBRATION_WINDOW_DAYS, 30));
   cfg.CALIBRATION_EDGE_BUCKETS = parseNumberList_(cfg.CALIBRATION_EDGE_BUCKETS, [0, 0.02, 0.04, 0.06, 0.10]);
 
