@@ -129,7 +129,7 @@ function resetWorkbook() {
 
 function isBetTrackingEnabled_() {
   var cfg = getConfig_();
-  return !!cfg.ENABLE_BET_TRACKING;
+  return !!cfg.ENABLE_BET_TRACKING && !!LEGACY_BET_TRACKING_ALLOW_REENABLE;
 }
 
 /* ===================== HEADERS ===================== */
