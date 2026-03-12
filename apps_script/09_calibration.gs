@@ -119,6 +119,15 @@ function applyResultToSnapshot_(snapshotObj) {
 }
 
 function runDailyCalibration() {
+  var settlement = settleCalibrationSnapshots_();
+  log_("INFO", "Calibration settlement complete", {
+    settledCount: settlement.settledCount,
+    unresolvedCount: settlement.unresolvedCount,
+    inspectedUnresolved: settlement.inspectedUnresolved,
+    skippedMissingOutcome: settlement.skippedMissingOutcome,
+    skippedInvalidRows: settlement.skippedInvalidRows
+  });
+
   var cfg = getConfig_();
   var report = computeCalibrationReport_(cfg);
   log_("INFO", "Calibration report generated", {
@@ -129,6 +138,126 @@ function runDailyCalibration() {
     suggestions: report.suggestions
   });
   return report;
+}
+
+function settleCalibrationSnapshots_() {
+  var ss = SpreadsheetApp.getActive();
+  var sh = ss.getSheetByName(SH.CALIBRATION_SNAPSHOTS);
+  if (!sh || sh.getLastRow() < 2) {
+    return { settledCount: 0, unresolvedCount: 0, inspectedUnresolved: 0, skippedMissingOutcome: 0, skippedInvalidRows: 0 };
+  }
+
+  var header = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0].map(function (x) { return String(x || "").trim(); });
+  var idxPk = indexOf_(header, "mlb_gamePk");
+  var idxSide = indexOf_(header, "bet_side");
+  var idxResult = indexOf_(header, "result");
+  var idxPnl = indexOf_(header, "pnl_units");
+  var idxResolvedAt = indexOf_(header, "resolved_at_local");
+  var idxUpdatedAt = indexOf_(header, "updated_at_local");
+  var idxAwayOdds = indexOf_(header, "away_odds_decimal");
+  var idxHomeOdds = indexOf_(header, "home_odds_decimal");
+  var idxUnits = indexOf_(header, "units_suggested");
+
+  if (idxPk < 0 || idxSide < 0 || idxResult < 0 || idxPnl < 0 || idxResolvedAt < 0 || idxAwayOdds < 0 || idxHomeOdds < 0 || idxUnits < 0) {
+    log_("WARN", "Calibration settlement skipped due to missing required columns", {
+      idxPk: idxPk,
+      idxSide: idxSide,
+      idxResult: idxResult,
+      idxPnl: idxPnl,
+      idxResolvedAt: idxResolvedAt,
+      idxAwayOdds: idxAwayOdds,
+      idxHomeOdds: idxHomeOdds,
+      idxUnits: idxUnits
+    });
+    return { settledCount: 0, unresolvedCount: 0, inspectedUnresolved: 0, skippedMissingOutcome: 0, skippedInvalidRows: 0 };
+  }
+
+  var rowCount = sh.getLastRow() - 1;
+  var data = sh.getRange(2, 1, rowCount, header.length).getValues();
+  var outcomeByPk = {};
+  var settledCount = 0;
+  var unresolvedCount = 0;
+  var inspectedUnresolved = 0;
+  var skippedMissingOutcome = 0;
+  var skippedInvalidRows = 0;
+  var nowIso = isoLocalWithOffset_(new Date());
+
+  for (var i = 0; i < data.length; i++) {
+    var row = data[i];
+    var alreadyResolved = String(row[idxResolvedAt] || "").trim();
+    var existingResult = String(row[idxResult] || "").toUpperCase();
+    if (alreadyResolved || existingResult === "WIN" || existingResult === "LOSS") continue;
+
+    unresolvedCount++;
+    inspectedUnresolved++;
+
+    var gamePk = String(row[idxPk] || "").trim();
+    var side = String(row[idxSide] || "").trim().toUpperCase();
+    if (!gamePk || (side !== "AWAY" && side !== "HOME")) {
+      skippedInvalidRows++;
+      continue;
+    }
+
+    if (!outcomeByPk[gamePk]) outcomeByPk[gamePk] = fetchMlbGameOutcomeByPk_(gamePk);
+    var outcome = outcomeByPk[gamePk];
+    if (!outcome || !outcome.isFinal || !outcome.winnerSide) {
+      skippedMissingOutcome++;
+      continue;
+    }
+
+    var odds = side === "AWAY" ? Number(row[idxAwayOdds]) : Number(row[idxHomeOdds]);
+    var units = Number(row[idxUnits]);
+    if (!isFinite(odds) || odds <= 1 || !isFinite(units)) {
+      skippedInvalidRows++;
+      continue;
+    }
+
+    var isWin = side === outcome.winnerSide;
+    var pnlUnits = isWin ? (units * (odds - 1)) : (-1 * units);
+    row[idxResult] = isWin ? "WIN" : "LOSS";
+    row[idxPnl] = round_(pnlUnits, 4);
+    row[idxResolvedAt] = nowIso;
+    if (idxUpdatedAt >= 0) row[idxUpdatedAt] = nowIso;
+    settledCount++;
+  }
+
+  if (settledCount > 0) sh.getRange(2, 1, rowCount, header.length).setValues(data);
+
+  var unresolvedRemainder = unresolvedCount - settledCount;
+  return {
+    settledCount: settledCount,
+    unresolvedCount: Math.max(0, unresolvedRemainder),
+    inspectedUnresolved: inspectedUnresolved,
+    skippedMissingOutcome: skippedMissingOutcome,
+    skippedInvalidRows: skippedInvalidRows
+  };
+}
+
+function fetchMlbGameOutcomeByPk_(gamePk) {
+  var url = "https://statsapi.mlb.com/api/v1.1/game/" + encodeURIComponent(String(gamePk || "")) + "/feed/live";
+  try {
+    var resp = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
+    if (resp.getResponseCode() !== 200) return { isFinal: false, winnerSide: "" };
+
+    var payload = JSON.parse(resp.getContentText() || "{}");
+    var abs = payload && payload.liveData && payload.liveData.linescore && payload.liveData.linescore.teams
+      ? payload.liveData.linescore.teams
+      : null;
+    if (!abs) return { isFinal: false, winnerSide: "" };
+
+    var awayRuns = Number(abs.away && abs.away.runs);
+    var homeRuns = Number(abs.home && abs.home.runs);
+    if (!isFinite(awayRuns) || !isFinite(homeRuns)) return { isFinal: false, winnerSide: "" };
+
+    var detailed = String(payload && payload.gameData && payload.gameData.status && payload.gameData.status.detailedState || "").toLowerCase();
+    var abstract = String(payload && payload.gameData && payload.gameData.status && payload.gameData.status.abstractGameState || "").toLowerCase();
+    var isFinal = abstract === "final" || detailed.indexOf("final") >= 0 || detailed.indexOf("game over") >= 0;
+    if (!isFinal || awayRuns === homeRuns) return { isFinal: false, winnerSide: "" };
+
+    return { isFinal: true, winnerSide: awayRuns > homeRuns ? "AWAY" : "HOME" };
+  } catch (e) {
+    return { isFinal: false, winnerSide: "" };
+  }
 }
 
 function computeCalibrationReport_(cfg) {
