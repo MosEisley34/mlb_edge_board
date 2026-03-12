@@ -7,6 +7,7 @@ function setup() {
   ensureSettings_(ss.getSheetByName(SH.SETTINGS));
 
   getOrCreateSheet_(ss, SH.LOG);
+  getOrCreateSheet_(ss, SH.RUN_SUMMARY_LOG);
   getOrCreateSheet_(ss, SH.ODDS_RAW);
   getOrCreateSheet_(ss, SH.ODDS_HISTORY);
   getOrCreateSheet_(ss, SH.MLB_SCHEDULE);
@@ -25,6 +26,7 @@ function setup() {
   getOrCreateSheet_(ss, SH.CALIBRATION_REPORT);
 
   ensureLogHeader_(ss.getSheetByName(SH.LOG));
+  ensureRunSummaryLogHeader_(ss.getSheetByName(SH.RUN_SUMMARY_LOG));
   ensureOddsHeader_(ss.getSheetByName(SH.ODDS_RAW));
   ensureOddsHistoryHeader_(ss.getSheetByName(SH.ODDS_HISTORY));
   ensureScheduleHeader_(ss.getSheetByName(SH.MLB_SCHEDULE));
@@ -51,7 +53,7 @@ function setup() {
 function resetWorkbook() {
   var ss = SpreadsheetApp.getActive();
   var names = [
-    SH.LOG, SH.ODDS_RAW, SH.ODDS_HISTORY, SH.MLB_SCHEDULE, SH.MLB_LINEUPS,
+    SH.LOG, SH.RUN_SUMMARY_LOG, SH.ODDS_RAW, SH.ODDS_HISTORY, SH.MLB_SCHEDULE, SH.MLB_LINEUPS,
     SH.BATTER_PROJ, SH.PITCHER_PROJ, SH.EDGE_BOARD, SH.SIGNAL_LOG, SH.PLAYER_MAP, SH.NOTIFY_STATE,
     SH.CALIBRATION_SNAPSHOTS, SH.CALIBRATION_REPORT
   ];
@@ -65,6 +67,7 @@ function resetWorkbook() {
   }
 
   getOrCreateSheet_(ss, SH.LOG);
+  getOrCreateSheet_(ss, SH.RUN_SUMMARY_LOG);
   getOrCreateSheet_(ss, SH.ODDS_RAW);
   getOrCreateSheet_(ss, SH.ODDS_HISTORY);
   getOrCreateSheet_(ss, SH.MLB_SCHEDULE);
@@ -83,6 +86,7 @@ function resetWorkbook() {
   getOrCreateSheet_(ss, SH.CALIBRATION_REPORT);
 
   ensureLogHeader_(ss.getSheetByName(SH.LOG));
+  ensureRunSummaryLogHeader_(ss.getSheetByName(SH.RUN_SUMMARY_LOG));
   ensureOddsHeader_(ss.getSheetByName(SH.ODDS_RAW));
   ensureOddsHistoryHeader_(ss.getSheetByName(SH.ODDS_HISTORY));
   ensureScheduleHeader_(ss.getSheetByName(SH.MLB_SCHEDULE));
@@ -135,6 +139,19 @@ function isBetTrackingEnabled_() {
 /* ===================== HEADERS ===================== */
 
 function ensureLogHeader_(sh) { setHeader_(sh, ["ts_local", "level", "message", "detail"]); }
+
+function ensureRunSummaryLogHeader_(sh) {
+  setHeader_(sh, [
+    "run_id","started_at_utc","finished_at_utc","outcome",
+    "trigger_source","app_mode","active_window","duration_ms",
+    "odds_outcome","odds_games","schedule_outcome","matched_count",
+    "model_outcome","computed","signal_outcome","bet_signals_found",
+    "cadence_mode","cadence_reason","cadence_minutes","zero_streak",
+    "credit_pressure_level","remaining_credits",
+    "reason_code","reason_detail","warnings_count",
+    "log_row_start","log_row_end","summary_schema_version"
+  ]);
+}
 
 function ensureOddsHeader_(sh) {
   setHeader_(sh, [
