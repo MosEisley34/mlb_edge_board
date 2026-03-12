@@ -25,6 +25,11 @@ Apps Script loads global functions/variables across files, so order is mostly fo
   - run `installTriggers()`.
 
 ## SIGNAL_LOG drift metrics
+- `SIGNAL_LOG` rows represent **signal delivery attempts** (not only successful sends).
+- Delivery fields indicate outcome per attempt:
+  - `delivery_status`: `sent` or `failed`
+  - `delivery_reason_code`: failure reason code (for example `missing_delivery_config`, `delivery_http_error`)
+  - `delivery_http`, `delivery_mode`, `delivery_error_preview`, `discord_message_id`
 - **Opening Drift** means **Open→Signal** and is tracked by:
   - `open_price_pick`, `open_implied_pick`
   - `delta_open_to_signal_price`, `delta_open_to_signal_implied`
