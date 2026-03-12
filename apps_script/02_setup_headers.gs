@@ -194,7 +194,8 @@ function ensureSignalLogHeader_(sh) {
     "close_price_pick","close_implied_pick",
     "delta_signal_to_close_price","delta_signal_to_close_implied",
     "close_reason_code",
-    "tier","confidence","units_suggested","source_reason"
+    "tier","confidence","units_suggested","source_reason",
+    "delivery_status","delivery_reason_code","delivery_http","delivery_mode","delivery_error_preview","discord_message_id"
   ]);
   applySignalLogColumnNotes_(sh);
 }

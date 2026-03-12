@@ -898,7 +898,13 @@ function maybeNotifyDiscord_(cfg, oddsId, dateKey, payload) {
     tier: String(payload.bet.tier || ""),
     confidence: isFinite(payload.conf) ? round_(payload.conf, 2) : "",
     units_suggested: isFinite(payload.units) ? round_(payload.units, 2) : "",
-    source_reason: String(reason || "")
+    source_reason: String(reason || ""),
+    delivery_status: "",
+    delivery_reason_code: "",
+    delivery_http: "",
+    delivery_mode: "",
+    delivery_error_preview: "",
+    discord_message_id: ""
   };
 
   var msg =
@@ -929,13 +935,22 @@ function maybeNotifyDiscord_(cfg, oddsId, dateKey, payload) {
   var includesComponents = false;
   var deliveryMode = discordDeliveryMode_(cfg, { allowWebhook: true });
   if (deliveryMode.mode === "missing") {
+    signalLogPayload.delivery_status = "failed";
+    signalLogPayload.delivery_reason_code = "missing_delivery_config";
+    signalLogPayload.delivery_mode = String(deliveryMode.mode || "");
+    signalLogPayload.delivery_error_preview = "missing delivery config";
+    appendSignalLogRow_(signalLogPayload);
     log_("WARN", "Discord notify skipped: missing delivery config", { includesComponents: includesComponents, deliveryMode: deliveryMode.mode, signalId: signalId });
     return false;
   }
 
   var res = sendDiscordByMode_(deliveryMode, payloadObj);
+  signalLogPayload.delivery_http = isFinite(res.http) ? Number(res.http) : "";
+  signalLogPayload.delivery_mode = String(res.deliveryMode || deliveryMode.mode || "");
   if (res.http >= 200 && res.http < 300) {
     var messageId = discordMessageIdFromBody_(res.body);
+    signalLogPayload.delivery_status = "sent";
+    signalLogPayload.discord_message_id = String(messageId || "");
     appendSignalLogRow_(signalLogPayload);
     props.setProperty(key, JSON.stringify({
       sig: sig,
@@ -951,6 +966,10 @@ function maybeNotifyDiscord_(cfg, oddsId, dateKey, payload) {
     return true;
   }
 
+  signalLogPayload.delivery_status = "failed";
+  signalLogPayload.delivery_reason_code = "delivery_http_error";
+  signalLogPayload.delivery_error_preview = String(res.body || "").slice(0, 250);
+  appendSignalLogRow_(signalLogPayload);
   log_("WARN", "Discord notify failed", {
     http: res.http,
     body: String(res.body || "").slice(0, 250),
