@@ -149,6 +149,10 @@ function fetchExternalFeatureSource_(cfg, source, games) {
       rows = cache.rows;
       rowsParsed = rows.length;
       staleFallbackUsed = true;
+    } else if (e && e.syntheticRows && e.syntheticRows.length) {
+      rows = e.syntheticRows;
+      rowsParsed = rows.length;
+      staleFallbackUsed = true;
     }
     if (sourceCfg.experimental && health.consecutiveFailures >= cfg.EXT_FEATURES_EXPERIMENTAL_FAIL_THRESHOLD) {
       health.disabledUntilMs = nowMs + (toInt_(cfg.EXT_FEATURES_EXPERIMENTAL_DISABLE_MIN, 120) * 60000);
@@ -177,8 +181,28 @@ function externalFeatureSourceCfg_(cfg, source) {
 }
 
 function fetchExternalFeatureRowsBySource_(sourceCfg, games) {
-  // Placeholder deterministic stubs with normalized schema.
-  // External providers can replace these implementations without touching scorer internals.
+  if (sourceCfg.source === "weather") {
+    try {
+      return buildWeatherExternalFeatureRows_(sourceCfg, games);
+    } catch (e) {
+      e.syntheticRows = buildSyntheticExternalFeatureRows_(sourceCfg, games);
+      throw e;
+    }
+  }
+
+  if (sourceCfg.source === "bullpen") {
+    try {
+      return buildBullpenExternalFeatureRows_(sourceCfg, games);
+    } catch (e) {
+      e.syntheticRows = buildSyntheticExternalFeatureRows_(sourceCfg, games);
+      throw e;
+    }
+  }
+
+  return buildSyntheticExternalFeatureRows_(sourceCfg, games);
+}
+
+function buildSyntheticExternalFeatureRows_(sourceCfg, games) {
   var out = [];
   for (var i = 0; i < games.length; i++) {
     var g = games[i] || {};
@@ -219,10 +243,146 @@ function fetchExternalFeatureRowsBySource_(sourceCfg, games) {
       item.contactQualityDelta = syntheticContactDelta_(g.mlb_gamePk);
       item.statcastDelta = item.contactQualityDelta * 0.03;
     }
-
     out.push(item);
   }
   return out;
+}
+
+function buildWeatherExternalFeatureRows_(sourceCfg, games) {
+  var out = [];
+  for (var i = 0; i < games.length; i++) {
+    var g = games[i] || {};
+    var gamePk = String(g.mlb_gamePk || "").trim();
+    if (!gamePk) continue;
+    var weather = fetchWeatherForGamePk_(gamePk);
+    out.push({
+      source: sourceCfg.source,
+      provider: sourceCfg.provider,
+      mlb_gamePk: gamePk,
+      gameDate_local: g.gameDate_local,
+      away_team: g.away_team,
+      home_team: g.home_team,
+      generated_at: isoLocalWithOffset_(new Date()),
+      runEnvDelta: weather.runEnvDelta,
+      weatherTempF: weather.temperatureF,
+      weatherWindMph: weather.windMph,
+      weatherShortForecast: weather.shortForecast,
+      weatherSeverity: weather.weatherSeverity,
+      weatherSourceTs: weather.forecastStartTime
+    });
+  }
+  return out;
+}
+
+function fetchWeatherForGamePk_(gamePk) {
+  var gameUrl = "https://statsapi.mlb.com/api/v1.1/game/" + encodeURIComponent(gamePk) + "/feed/live";
+  var gameResp = UrlFetchApp.fetch(gameUrl, { muteHttpExceptions: true });
+  if (gameResp.getResponseCode() !== 200) throw new Error("weather_game_fetch_http_" + gameResp.getResponseCode());
+
+  var game = JSON.parse(gameResp.getContentText() || "{}");
+  var venue = game && game.gameData && game.gameData.venue ? game.gameData.venue : {};
+  var loc = venue && venue.location ? venue.location : {};
+  var lat = Number(loc.defaultCoordinates && loc.defaultCoordinates.latitude);
+  var lon = Number(loc.defaultCoordinates && loc.defaultCoordinates.longitude);
+  if (!isFinite(lat) || !isFinite(lon)) {
+    lat = Number(loc.latitude);
+    lon = Number(loc.longitude);
+  }
+  if (!isFinite(lat) || !isFinite(lon)) throw new Error("weather_missing_venue_coords");
+
+  var pointsUrl = "https://api.weather.gov/points/" + lat + "," + lon;
+  var pointsResp = UrlFetchApp.fetch(pointsUrl, { muteHttpExceptions: true, headers: { "User-Agent": "mlb-edge-board/1.0" } });
+  if (pointsResp.getResponseCode() !== 200) throw new Error("weather_points_http_" + pointsResp.getResponseCode());
+  var points = JSON.parse(pointsResp.getContentText() || "{}");
+  var hourlyUrl = String(points && points.properties && points.properties.forecastHourly ? points.properties.forecastHourly : "");
+  if (!hourlyUrl) throw new Error("weather_missing_hourly_url");
+
+  var hourlyResp = UrlFetchApp.fetch(hourlyUrl, { muteHttpExceptions: true, headers: { "User-Agent": "mlb-edge-board/1.0" } });
+  if (hourlyResp.getResponseCode() !== 200) throw new Error("weather_hourly_http_" + hourlyResp.getResponseCode());
+  var hourly = JSON.parse(hourlyResp.getContentText() || "{}");
+  var periods = hourly && hourly.properties && hourly.properties.periods ? hourly.properties.periods : [];
+  if (!periods.length) throw new Error("weather_empty_periods");
+
+  var first = periods[0] || {};
+  var tempF = Number(first.temperature);
+  if (!isFinite(tempF)) tempF = 70;
+  var windMph = parseWindSpeedMph_(first.windSpeed);
+  var severity = scoreWeatherSeverity_(tempF, windMph, String(first.shortForecast || ""));
+  return {
+    runEnvDelta: (severity - 0.5) * 0.08,
+    weatherSeverity: severity,
+    temperatureF: tempF,
+    windMph: windMph,
+    shortForecast: String(first.shortForecast || ""),
+    forecastStartTime: String(first.startTime || "")
+  };
+}
+
+function parseWindSpeedMph_(windSpeedRaw) {
+  var txt = String(windSpeedRaw || "");
+  var m = txt.match(/(\d+)(?:\s*to\s*(\d+))?/i);
+  if (!m) return 0;
+  var lo = Number(m[1]);
+  var hi = Number(m[2]);
+  if (isFinite(lo) && isFinite(hi)) return (lo + hi) / 2;
+  return isFinite(lo) ? lo : 0;
+}
+
+function scoreWeatherSeverity_(tempF, windMph, shortForecast) {
+  var tempPenalty = Math.abs(Number(tempF) - 72) / 80;
+  if (!isFinite(tempPenalty)) tempPenalty = 0.15;
+  var windPenalty = Math.min(1, Number(windMph) / 30);
+  if (!isFinite(windPenalty)) windPenalty = 0;
+  var desc = String(shortForecast || "").toLowerCase();
+  var condPenalty = 0;
+  if (desc.indexOf("thunder") >= 0) condPenalty = 1;
+  else if (desc.indexOf("rain") >= 0 || desc.indexOf("showers") >= 0) condPenalty = 0.7;
+  else if (desc.indexOf("snow") >= 0) condPenalty = 0.9;
+  else if (desc.indexOf("drizzle") >= 0 || desc.indexOf("fog") >= 0) condPenalty = 0.5;
+  var severity = 0.5 + (0.2 * tempPenalty) + (0.35 * windPenalty) + (0.45 * condPenalty);
+  return Math.max(0, Math.min(1, severity));
+}
+
+function buildBullpenExternalFeatureRows_(sourceCfg, games) {
+  var teamSet = {};
+  for (var i = 0; i < games.length; i++) {
+    var g = games[i] || {};
+    if (g.away_team) teamSet[String(g.away_team)] = true;
+    if (g.home_team) teamSet[String(g.home_team)] = true;
+  }
+  var teams = Object.keys(teamSet);
+  var usageWindowDays = 4;
+  var usage = fetchRecentBullpenUsage_(usageWindowDays, teams);
+  if (!usage || !usage.byTeam) throw new Error("bullpen_usage_unavailable");
+
+  var out = [];
+  for (var j = 0; j < games.length; j++) {
+    var game = games[j] || {};
+    var gamePk = String(game.mlb_gamePk || "").trim();
+    if (!gamePk) continue;
+    var awayAvail = bullpenAvailabilityForTeam_(usage, game.away_team);
+    var homeAvail = bullpenAvailabilityForTeam_(usage, game.home_team);
+    out.push({
+      source: sourceCfg.source,
+      provider: sourceCfg.provider,
+      mlb_gamePk: gamePk,
+      gameDate_local: game.gameDate_local,
+      away_team: game.away_team,
+      home_team: game.home_team,
+      generated_at: isoLocalWithOffset_(new Date()),
+      awayBullpenFatigue: clamp_(0, 1, 1 - awayAvail),
+      homeBullpenFatigue: clamp_(0, 1, 1 - homeAvail),
+      runPrevDeltaAway: -0.06 * clamp_(0, 1, 1 - awayAvail),
+      runPrevDeltaHome: -0.06 * clamp_(0, 1, 1 - homeAvail)
+    });
+  }
+  return out;
+}
+
+function bullpenAvailabilityForTeam_(usage, teamName) {
+  var teamKey = normalizeTeam_(teamName);
+  if (!teamKey || !usage || !usage.byTeam || !usage.byTeam[teamKey]) return 1;
+  return clamp_(0.05, 1.15, Number(usage.byTeam[teamKey].availability || 1));
 }
 
 function mergeExternalFeatureRows_(byGame, rows) {
