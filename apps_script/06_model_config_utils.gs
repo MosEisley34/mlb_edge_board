@@ -64,6 +64,8 @@ function refreshModelAndEdge_core_(cfg, mlbRes) {
   var edgeRows = [];
   var computed = 0;
   var betSignalsFound = 0;
+  var notificationsDurationMs = 0;
+  var calibrationSnapshotWriteDurationMs = 0;
   var skippedNoMatch = 0, skippedLineups = 0, skippedPitchers = 0;
   var lineupFallbackGames = 0;
   var totalLineupSlots = 0, totalMatchedSlots = 0;
@@ -194,6 +196,7 @@ function refreshModelAndEdge_core_(cfg, mlbRes) {
           units = u;
           betSignalsFound++;
 
+          var notifyStartMs = Date.now();
           var sent = maybeNotifyDiscord_(cfg, oddsId, todayKey, {
             mode: mode,
             awayTeam: awayTeam,
@@ -216,6 +219,8 @@ function refreshModelAndEdge_core_(cfg, mlbRes) {
             mlbGamePk: mlbPk,
             updatedAt: (o.updated_at_local || o.updated_at_utc || "")
           });
+
+          notificationsDurationMs += Math.max(0, Date.now() - notifyStartMs);
 
           if (sent) {
             exposure.plays += 1;
@@ -256,7 +261,9 @@ function refreshModelAndEdge_core_(cfg, mlbRes) {
 
   writeRowsByHeader_(shEdge, edgeRows);
 
+  var calibrationSnapshotWriteStartedAtMs = Date.now();
   var snapshotRes = persistCalibrationSnapshots_(cfg, edgeRows, schedByPk, externalFeatureCtx);
+  calibrationSnapshotWriteDurationMs = Math.max(0, Date.now() - calibrationSnapshotWriteStartedAtMs);
 
   log_("INFO", "refreshModelAndEdge completed", {
     opsLeagueAvg: opsLeagueAvg,
@@ -279,7 +286,9 @@ function refreshModelAndEdge_core_(cfg, mlbRes) {
     bullpenFeatureAppliedGames: bullpenAppliedGames,
     experimentalAppliedGames: experimentalAppliedGames,
     externalFeatureHealth: externalFeatureCtx.health.bySource,
-    calibrationSnapshotsUpserted: snapshotRes.upserted
+    calibrationSnapshotsUpserted: snapshotRes.upserted,
+    notificationsDurationMs: notificationsDurationMs,
+    calibrationSnapshotWriteDurationMs: calibrationSnapshotWriteDurationMs
   });
 
   return {
@@ -295,7 +304,11 @@ function refreshModelAndEdge_core_(cfg, mlbRes) {
     experimentalAppliedGames: experimentalAppliedGames,
     externalFeatureHealth: externalFeatureCtx.health.bySource,
     externalFeatureFetchLogs: externalFeatureCtx.diagnostics.fetchLogs,
-    calibrationSnapshotsUpserted: snapshotRes.upserted
+    calibrationSnapshotsUpserted: snapshotRes.upserted,
+    stageTimings: {
+      notifications: { durationMs: notificationsDurationMs },
+      calibration_snapshot_write: { durationMs: calibrationSnapshotWriteDurationMs }
+    }
   };
 }
 

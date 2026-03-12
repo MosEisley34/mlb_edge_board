@@ -1146,7 +1146,7 @@ function runPipeline(opts) {
   var lock = null;
   var hasLock = false;
   var runSummary = {
-    summary_schema_version: "1.0.0",
+    summary_schema_version: "1.1.0",
     run_id: runId,
     started_at: new Date().toISOString(),
     duration_ms: 0,
@@ -1160,11 +1160,13 @@ function runPipeline(opts) {
       model: { outcome: "not_started" },
       signal: { outcome: "not_started" }
     },
+    stage_durations_ms: {},
     cadence: null,
     credit_state: null,
     reason_codes: {
       skips: [],
-      blockers: []
+      blockers: [],
+      warnings: []
     }
   };
 
@@ -1176,6 +1178,83 @@ function runPipeline(opts) {
     var normalized = String(code);
     for (var i = 0; i < target.length; i++) if (String(target[i]) === normalized) return;
     target.push(normalized);
+  }
+
+  function stageWarnThresholdMs_(cfg, stageName) {
+    var genericMs = Math.max(1000, toFloat_(cfg.PIPELINE_STAGE_WARN_SEC, 20) * 1000);
+    if (stageName === "odds_fetch") return Math.max(1000, toFloat_(cfg.PIPELINE_STAGE_WARN_ODDS_FETCH_SEC, cfg.PIPELINE_STAGE_WARN_SEC || 20) * 1000);
+    if (stageName === "model") return Math.max(1000, toFloat_(cfg.PIPELINE_STAGE_WARN_MODEL_SEC, cfg.PIPELINE_STAGE_WARN_SEC || 20) * 1000);
+    return genericMs;
+  }
+
+  function finalizeStage_(stageName, startedAtMs, endedAtMs, extras) {
+    var startMs = Math.max(0, toInt_(startedAtMs, 0));
+    var endMs = Math.max(startMs, toInt_(endedAtMs, Date.now()));
+    var durationMs = Math.max(0, endMs - startMs);
+    var detail = {
+      started_at: new Date(startMs).toISOString(),
+      ended_at: new Date(endMs).toISOString(),
+      duration_ms: durationMs
+    };
+    var extraObj = extras || {};
+    var extraKeys = Object.keys(extraObj);
+    for (var i = 0; i < extraKeys.length; i++) detail[extraKeys[i]] = extraObj[extraKeys[i]];
+    runSummary.stage_durations_ms[stageName] = durationMs;
+    runSummary.stages[stageName] = detail;
+    return detail;
+  }
+
+  function applyStageDurationWarnings_(cfg, props) {
+    var stages = runSummary.stages || {};
+    var stageKeys = Object.keys(stages);
+    var raw = String(props.getProperty(PROP.PIPELINE_STAGE_DURATION_EMA_MS) || "");
+    var emaMap = {};
+    try { emaMap = raw ? JSON.parse(raw) : {}; } catch (eEma) { emaMap = {}; }
+
+    var alpha = clamp_(0.01, 1, toFloat_(cfg.PIPELINE_STAGE_DURATION_EMA_ALPHA, 0.2));
+    var spikeMultiplier = Math.max(1.1, toFloat_(cfg.PIPELINE_STAGE_DRIFT_SPIKE_MULTIPLIER, 2.0));
+    var spikeMinMs = Math.max(500, toInt_(cfg.PIPELINE_STAGE_DRIFT_SPIKE_MIN_MS, 5000));
+    var spikes = [];
+
+    for (var i = 0; i < stageKeys.length; i++) {
+      var stageName = String(stageKeys[i] || "");
+      var stage = stages[stageName] || {};
+      var durationMsRaw = toInt_(stage.duration_ms, -1);
+      if (durationMsRaw < 0) continue;
+      var durationMs = Math.max(0, durationMsRaw);
+
+      var thresholdMs = stageWarnThresholdMs_(cfg, stageName);
+      if (durationMs > thresholdMs) addReasonCode_("warnings", "stage_" + stageName + "_duration_warn");
+
+      var prevAvg = toFloat_(emaMap[stageName], NaN);
+      var hasPrev = isFinite(prevAvg) && prevAvg > 0;
+      var nextAvg = hasPrev ? ((alpha * durationMs) + ((1 - alpha) * prevAvg)) : durationMs;
+      emaMap[stageName] = round_(nextAvg, 3);
+
+      if (hasPrev && durationMs > (prevAvg * spikeMultiplier) && (durationMs - prevAvg) >= spikeMinMs) {
+        var driftCode = "stage_" + stageName + "_drift_spike";
+        addReasonCode_("warnings", driftCode);
+        spikes.push({
+          stage: stageName,
+          reason_code: driftCode,
+          duration_ms: durationMs,
+          moving_avg_ms: round_(prevAvg, 2),
+          delta_ms: round_(durationMs - prevAvg, 2),
+          multiplier: round_(durationMs / Math.max(1, prevAvg), 3)
+        });
+      }
+    }
+
+    props.setProperty(PROP.PIPELINE_STAGE_DURATION_EMA_MS, JSON.stringify(emaMap));
+    if (spikes.length > 0) {
+      runSummary.performance = {
+        stage_duration_drift_spikes: spikes,
+        ema_alpha: alpha,
+        drift_spike_multiplier: spikeMultiplier,
+        drift_spike_min_ms: spikeMinMs
+      };
+      log_("WARN", "Pipeline stage duration drift spike", { spikes: spikes });
+    }
   }
 
   function emitRunSummary_(status) {
@@ -1248,7 +1327,11 @@ function runPipeline(opts) {
     }
 
     var oddsRes = { sportKeyUsed: chooseSportKey_(cfg), games: 0, updatedAt: isoLocalWithOffset_(new Date()), skipped: true };
+    var oddsWindowResolveStartedAtMs = Date.now();
     var oddsWindowCtx = resolveOddsWindowForPipeline_(cfg, props);
+    finalizeStage_("odds_window_resolve", oddsWindowResolveStartedAtMs, Date.now(), {
+      source: oddsWindowCtx.source
+    });
     var oddsWindow = oddsWindowCtx.window;
     var oddsWindowError = oddsWindowCtx.error;
 
@@ -1308,6 +1391,7 @@ function runPipeline(opts) {
       }
     }
 
+    var oddsFetchStartedAtMs = Date.now();
     if (shouldRefreshOdds) {
       var oddsBlockState = evaluateOddsFetchBlocker_(cfg, props, nowMs);
       runSummary.credit_state = {
@@ -1357,15 +1441,40 @@ function runPipeline(opts) {
     } else {
       runSummary.stages.odds.outcome = "skipped";
     }
+    finalizeStage_("odds_fetch", oddsFetchStartedAtMs, Date.now(), {
+      outcome: runSummary.stages.odds.outcome,
+      refreshed: !!shouldRefreshOdds,
+      game_count: Math.max(0, toInt_(oddsRes.games, 0))
+    });
 
     if (runSummary.stages.schedule.outcome === "not_started") runSummary.stages.schedule.outcome = "ok";
 
+    var scheduleLineupsStartedAtMs = Date.now();
     var mlbRes = refreshMLBScheduleAndLineups_(cfg, { sportKeyUsed: oddsRes.sportKeyUsed });
     runSummary.stages.schedule.outcome = "ok";
+    finalizeStage_("schedule_lineups", scheduleLineupsStartedAtMs, Date.now(), {
+      matched_count: Math.max(0, toInt_(mlbRes.matchedCount, 0))
+    });
+
+    var projectionsStartedAtMs = Date.now();
     refreshProjectionsIfStale_(cfg, false);
+    finalizeStage_("projections", projectionsStartedAtMs, Date.now());
+
+    var modelStartedAtMs = Date.now();
     var modelRes = refreshModelAndEdge_(cfg, mlbRes);
+    finalizeStage_("model", modelStartedAtMs, Date.now(), {
+      computed: Math.max(0, toInt_(modelRes.computed, 0))
+    });
     runSummary.stages.model.outcome = "ok";
     runSummary.stages.signal.outcome = "ok";
+
+    var modelStageTimings = modelRes.stageTimings || {};
+    var notificationsDurationMs = Math.max(0, toInt_(modelStageTimings.notifications && modelStageTimings.notifications.durationMs, 0));
+    var calibrationSnapshotWriteDurationMs = Math.max(0, toInt_(modelStageTimings.calibration_snapshot_write && modelStageTimings.calibration_snapshot_write.durationMs, 0));
+    var modelEndedAtMs = Date.now();
+    finalizeStage_("notifications", modelEndedAtMs - notificationsDurationMs, modelEndedAtMs);
+    finalizeStage_("calibration_snapshot_write", modelEndedAtMs - calibrationSnapshotWriteDurationMs, modelEndedAtMs);
+
     var cadenceState = updatePipelineCadenceState_(cfg, props, mlbRes.matchedCount, modelRes.computed);
     runSummary.cadence = {
       mode: cadenceState.mode,
@@ -1404,6 +1513,8 @@ function runPipeline(opts) {
     props.setProperty(PROP.LAST_PIPELINE_AT, startedUtc);
     props.setProperty(PROP.LAST_PIPELINE_STATUS, "OK");
     props.setProperty(PROP.LAST_PIPELINE_SUMMARY, summary);
+
+    applyStageDurationWarnings_(cfg, props);
 
     if (runState.suppressVerbose) {
       log_("INFO", "state_unchanged", {
