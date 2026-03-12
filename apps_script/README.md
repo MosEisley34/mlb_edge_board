@@ -55,3 +55,9 @@ Recommended low-credit settings:
 - `ODDS_LOW_CREDIT_BOOKMAKERS=` a curated CSV list (optional), for example `draftkings,fanduel`
 
 Switch back to `ODDS_USAGE_PROFILE=NORMAL` when credits are healthy.
+
+## Legacy bet tracking deprecation
+- Legacy bet tracking flows are retired by default.
+- `doGet` / `doPost` action routes in `08_bet_actions.gs` return informational pages unless bet tracking is explicitly re-enabled.
+- Setup/reset only create `BET_LOG` and `BET_EVENTS` when both the settings toggle and constants kill-switch are enabled.
+- Existing legacy tabs are preserved when disabled so historical data is migration-safe.

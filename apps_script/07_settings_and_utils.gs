@@ -84,7 +84,7 @@ function ensureSettings_(sh) {
     ["NOTIFY_COOLDOWN_MIN", "60", "Minimum minutes between Discord sends for the same odds_game_id"],
     ["NOTIFY_MIN_ODDS_MOVE", "0.03", "Minimum decimal odds change required to re-notify"],
     ["NOTIFY_MIN_EDGE_MOVE_PCT", "0.75", "Minimum edge change (percentage points) required to re-notify"],
-    ["ENABLE_BET_TRACKING", "FALSE", "TRUE/FALSE: keep legacy BET_LOG and BET_EVENTS workflows enabled"],
+    ["ENABLE_BET_TRACKING", "FALSE", "TRUE/FALSE: legacy toggle (also requires LEGACY_BET_TRACKING_ALLOW_REENABLE=true in constants)"],
     ["ENABLE_SIGNAL_CLOSE_UPDATER", "FALSE", "TRUE/FALSE: enable time-based close/CLV stamp updates for SIGNAL_LOG"],
     ["SIGNAL_CLOSE_UPDATER_MINUTES", "30", "Cadence in minutes for SIGNAL_LOG close/CLV updater trigger"],
     ["SIGNAL_CLOSE_PRESTART_MIN", "15", "Allow close stamping starting this many minutes before first pitch"],

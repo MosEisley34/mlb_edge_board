@@ -1,19 +1,20 @@
 /* ===================== ACTION ROUTING + OPTIONAL LEGACY BET TRACKING ===================== */
 
 function doGet(e) {
+  if (!isBetTrackingEnabled_()) return renderBetTrackingDisabledPage_();
   return handleBetActionGet_(e && e.parameter ? e.parameter : {});
 }
 
 function doPost(e) {
+  if (!isBetTrackingEnabled_()) return renderBetTrackingDisabledPage_();
   return handleBetActionPost_(e && e.parameter ? e.parameter : {});
 }
 
 function handleBetActionGet_(p) {
   var action = String(p.action || "").toLowerCase();
   if (action === "test") return renderActionTestPage_(p);
-  if (action === "confirm") return renderConfirmPlacedForm_(p);
-  if (action === "mark") return handleMarkResultFromLink_(p);
   if (action === "pending") return renderPendingHelp_();
+  if (action === "confirm" || action === "mark") return renderLegacyActionRetiredPage_();
   return renderHtmlPage_("Lucky Luciano MLB — Actions", "<p>Use Discord action links to continue.</p>");
 }
 
@@ -31,75 +32,20 @@ function renderActionTestPage_(p) {
 
 function handleBetActionPost_(p) {
   var action = String(p.action || "").toLowerCase();
-  if (action !== "confirm_submit") return renderHtmlPage_("Error", "<p>Unknown action.</p>");
-
-  var v = verifyActionTokenFromParam_(p.token, "confirm", String(p.bet_id || ""));
-  if (!v.ok) return renderHtmlPage_("Token Error", "<p>" + htmlEscape_(v.error) + "</p>");
-
-  var consume = consumeNonce_(v.payload.nonce);
-  if (!consume.ok) return renderHtmlPage_("Token Error", "<p>" + htmlEscape_(consume.error) + "</p>");
-
-  try {
-    var out = confirmBetPlaced_(String(p.bet_id || ""), p.placed_american_odds, p.units_placed);
-    return renderHtmlPage_("Bet marked PLACED", "<p>✅ Bet marked as <b>PLACED</b>.</p>" +
-      "<p><b>American odds:</b> " + htmlEscape_(String(out.american)) + "</p>" +
-      "<p><b>Decimal odds:</b> " + htmlEscape_(String(out.decimal)) + "</p>" +
-      "<p><b>Units:</b> " + htmlEscape_(String(out.units)) + "</p>");
-  } catch (err) {
-    return renderHtmlPage_("Error", "<p>❌ " + htmlEscape_(String(err)) + "</p>");
-  }
+  if (action === "confirm_submit") return renderLegacyActionRetiredPage_();
+  return renderHtmlPage_("Error", "<p>Unknown action.</p>");
 }
 
 function createPendingBet_(cfg, args) {
-  var sh = SpreadsheetApp.getActive().getSheetByName(BET_TRACKING_SHEETS.BET_LOG);
-  if (!sh) return "";
-
-  var betId = Utilities.getUuid();
-  var nowLocal = isoLocalWithOffset_(new Date());
-
-  var row = [
-    betId,
-    nowLocal,
-    "PENDING",
-    String(args.oddsGameId || ""),
-    String(args.mlbGamePk || ""),
-    String(args.awayTeam || ""),
-    String(args.homeTeam || ""),
-    String(args.pickSide || ""),
-    String(args.pickTeam || ""),
-    "h2h",
-    String(args.commenceLocal || ""),
-    args.pickPrice,
-    args.modelProb,
-    args.implied,
-    args.noVigImplied,
-    args.edge,
-    args.confidence,
-    args.unitsSuggested,
-    "",
-    "",
-    "",
-    "",
-    "",
-    "",
-    "",
-    ""
-  ];
-
-  sh.appendRow(row);
-  appendBetEvent_(betId, "PENDING_CREATED", "", "PENDING", {
-    odds_game_id: String(args.oddsGameId || ""),
-    mode: String(args.mode || "")
-  });
-  return betId;
+  log_("INFO", "createPendingBet_ is retired; legacy bet tracking is disabled by default.", {});
+  return "";
 }
 
 function appendBetEvent_(betId, eventName, fromStatus, toStatus, detailObj) {
-  var sh = SpreadsheetApp.getActive().getSheetByName(BET_TRACKING_SHEETS.BET_EVENTS);
-  if (!sh) return;
-  var detail = detailObj ? JSON.stringify(detailObj) : "";
-  if (detail.length > 1800) detail = detail.slice(0, 1800) + "…(trimmed)";
-  sh.appendRow([isoLocalWithOffset_(new Date()), String(betId || ""), String(eventName || ""), String(fromStatus || ""), String(toStatus || ""), detail]);
+  log_("INFO", "appendBetEvent_ is retired; legacy bet tracking is disabled by default.", {
+    bet_id: String(betId || ""),
+    event: String(eventName || "")
+  });
 }
 
 function buildActionLinks_(cfg, betId) {
@@ -174,135 +120,27 @@ function consumeNonce_(nonce) {
   return { ok: true };
 }
 
-function findBetRowById_(betId) {
-  var sh = SpreadsheetApp.getActive().getSheetByName(BET_TRACKING_SHEETS.BET_LOG);
-  if (!sh) return null;
-  var v = sh.getDataRange().getValues();
-  if (!v || v.length < 2) return null;
-  var h = mapToString_(v[0]);
-  var iBet = indexOf_(h, "bet_id");
-  if (iBet < 0) return null;
-  for (var i = 1; i < v.length; i++) {
-    if (String(v[i][iBet] || "") === String(betId || "")) return { sh: sh, values: v, header: h, row: i + 1 };
-  }
-  return null;
-}
-
-function confirmBetPlaced_(betId, americanOdds, unitsPlaced) {
-  var found = findBetRowById_(betId);
-  if (!found) throw new Error("bet_id not found");
-
-  var h = found.header;
-  var rowVals = found.values[found.row - 1];
-
-  var iStatus = indexOf_(h, "status");
-  var iPlacedAt = indexOf_(h, "placed_at_local");
-  var iAm = indexOf_(h, "placed_american_odds");
-  var iDec = indexOf_(h, "placed_decimal_odds");
-  var iUnits = indexOf_(h, "units_placed");
-
-  var fromStatus = String(rowVals[iStatus] || "");
-  if (fromStatus !== "PENDING") throw new Error("Only PENDING bets can be marked PLACED.");
-
-  var am = normalizeAmericanOdds_(americanOdds);
-  var dec = americanToDecimal_(am);
-  var u = toFloat_(unitsPlaced, NaN);
-  if (!isFinite(u) || u <= 0) throw new Error("Units placed must be > 0.");
-
-  found.sh.getRange(found.row, iStatus + 1).setValue("PLACED");
-  found.sh.getRange(found.row, iPlacedAt + 1).setValue(isoLocalWithOffset_(new Date()));
-  found.sh.getRange(found.row, iAm + 1).setValue(am);
-  found.sh.getRange(found.row, iDec + 1).setValue(dec);
-  found.sh.getRange(found.row, iUnits + 1).setValue(Math.round(u * 100) / 100);
-
-  appendBetEvent_(betId, "PLACED_CONFIRMED", fromStatus, "PLACED", { american: am, decimal: dec, units: u });
-  return { american: am, decimal: dec, units: Math.round(u * 100) / 100 };
-}
-
-function markBetResult_(betId, result) {
-  var found = findBetRowById_(betId);
-  if (!found) throw new Error("bet_id not found");
-
-  var h = found.header;
-  var r = found.values[found.row - 1];
-  var iStatus = indexOf_(h, "status");
-  var iResult = indexOf_(h, "result");
-  var iResultAt = indexOf_(h, "result_at_local");
-  var iPnL = indexOf_(h, "pnl_units");
-  var iUnits = indexOf_(h, "units_placed");
-  var iDec = indexOf_(h, "placed_decimal_odds");
-
-  var fromStatus = String(r[iStatus] || "");
-  if (fromStatus !== "PLACED") throw new Error("Only PLACED bets can be settled.");
-
-  var rs = String(result || "").toUpperCase();
-  if (rs !== "WIN" && rs !== "LOSS" && rs !== "PUSH" && rs !== "VOID") throw new Error("Invalid result.");
-
-  var units = toFloat_(r[iUnits], NaN);
-  var dec = toFloat_(r[iDec], NaN);
-  if (!isFinite(units) || units <= 0) throw new Error("units_placed missing.");
-
-  var pnl = 0;
-  if (rs === "WIN") {
-    if (!isFinite(dec) || dec <= 1) throw new Error("placed_decimal_odds missing.");
-    pnl = units * (dec - 1);
-  } else if (rs === "LOSS") {
-    pnl = -units;
-  }
-
-  found.sh.getRange(found.row, iStatus + 1).setValue(rs);
-  found.sh.getRange(found.row, iResult + 1).setValue(rs);
-  found.sh.getRange(found.row, iResultAt + 1).setValue(isoLocalWithOffset_(new Date()));
-  found.sh.getRange(found.row, iPnL + 1).setValue(Math.round(pnl * 100) / 100);
-
-  appendBetEvent_(betId, "RESULT_MARKED", fromStatus, rs, { result: rs, pnl_units: pnl });
-  return { result: rs, pnl: Math.round(pnl * 100) / 100 };
-}
-
-function handleMarkResultFromLink_(p) {
-  var betId = String(p.bet_id || "");
-  var result = String(p.result || "").toUpperCase();
-  var v = verifyActionTokenFromParam_(p.token, "mark", betId);
-  if (!v.ok) return renderHtmlPage_("Token Error", "<p>" + htmlEscape_(v.error) + "</p>");
-  if (String(v.payload.result || "").toUpperCase() !== result) return renderHtmlPage_("Token Error", "<p>Token result mismatch.</p>");
-
-  var consume = consumeNonce_(v.payload.nonce);
-  if (!consume.ok) return renderHtmlPage_("Token Error", "<p>" + htmlEscape_(consume.error) + "</p>");
-
-  try {
-    var out = markBetResult_(betId, result);
-    return renderHtmlPage_("Bet settled", "<p>✅ Bet marked as <b>" + htmlEscape_(out.result) + "</b>.</p>" +
-      "<p><b>PnL units:</b> " + htmlEscape_(String(out.pnl)) + "</p>");
-  } catch (err) {
-    return renderHtmlPage_("Error", "<p>❌ " + htmlEscape_(String(err)) + "</p>");
-  }
-}
-
-function renderConfirmPlacedForm_(p) {
-  var betId = String(p.bet_id || "");
-  var v = verifyActionTokenFromParam_(p.token, "confirm", betId);
-  if (!v.ok) return renderHtmlPage_("Token Error", "<p>" + htmlEscape_(v.error) + "</p>");
-
-  var body = '' +
-    '<p><b>Bet ID:</b> <code>' + htmlEscape_(betId) + '</code></p>' +
-    '<p>Confirm placement by providing actual American odds and units.</p>' +
-    '<form method="post">' +
-    '<input type="hidden" name="action" value="confirm_submit" />' +
-    '<input type="hidden" name="bet_id" value="' + htmlEscape_(betId) + '" />' +
-    '<input type="hidden" name="token" value="' + htmlEscape_(String(p.token || "")) + '" />' +
-    '<p><label>American odds</label><br/><input name="placed_american_odds" placeholder="-118 or +145" required /></p>' +
-    '<p><label>Units placed</label><br/><input name="units_placed" placeholder="0.33" required /></p>' +
-    '<p><button type="submit">Confirm Placed</button></p>' +
-    '</form>';
-
-  return renderHtmlPage_("Confirm Placed", body);
-}
-
 function renderPendingHelp_() {
-  var body = '<p>This endpoint supports optional legacy workflow actions.</p>' +
-    '<p>If legacy tracking is enabled, open <b>' + htmlEscape_(BET_TRACKING_SHEETS.BET_LOG) + '</b> and filter <code>status = PENDING</code>.</p>' +
-    '<p>Use Discord links to confirm placement and mark outcomes.</p>';
+  var body = '<p>Legacy bet actions are retired.</p>' +
+    '<p>No new records are written to <b>' + htmlEscape_(BET_TRACKING_SHEETS.BET_LOG) + '</b> or <b>' + htmlEscape_(BET_TRACKING_SHEETS.BET_EVENTS) + '</b>.</p>' +
+    '<p>Existing tabs are left intact for historical reference when present.</p>';
   return renderHtmlPage_("Pending Actions", body);
+}
+
+function renderBetTrackingDisabledPage_() {
+  return renderHtmlPage_(
+    "Legacy Bet Tracking Disabled",
+    "<p>This web app endpoint is intentionally disabled because <code>ENABLE_BET_TRACKING</code> is <b>FALSE</b>.</p>" +
+    "<p>Legacy action links are no longer processed by default.</p>"
+  );
+}
+
+function renderLegacyActionRetiredPage_() {
+  return renderHtmlPage_(
+    "Legacy Bet Action Retired",
+    "<p>This legacy action was retired as part of bet-tracking deprecation.</p>" +
+    "<p>If you need temporary legacy behavior, explicitly enable <code>ENABLE_BET_TRACKING</code> and restore archived handlers.</p>"
+  );
 }
 
 function renderHtmlPage_(title, bodyHtml) {
@@ -320,19 +158,4 @@ function htmlEscape_(s) {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#039;");
-}
-
-function normalizeAmericanOdds_(v) {
-  var s = String(v || "").trim();
-  if (!s) throw new Error("American odds are required.");
-  var n = Number(s);
-  if (!isFinite(n) || n === 0 || Math.abs(n) < 100) throw new Error("American odds must be like -110 or +145.");
-  return (n > 0) ? Math.round(n) : -Math.round(Math.abs(n));
-}
-
-function americanToDecimal_(am) {
-  var n = Number(am);
-  if (!isFinite(n) || n === 0) throw new Error("Invalid American odds.");
-  if (n > 0) return 1 + (n / 100);
-  return 1 + (100 / Math.abs(n));
 }
