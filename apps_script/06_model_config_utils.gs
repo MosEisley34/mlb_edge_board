@@ -739,24 +739,210 @@ function computeUnits_(unitsCfg, tier, confidence) {
 }
 
 
-function getSignalLogOpenSnapshotByOddsId_() {
-  var ss = SpreadsheetApp.getActive();
-  var sh = ss.getSheetByName(SH.ODDS_HISTORY);
-  if (!sh) return {};
 
-  var rows = readSheetAsObjects_(sh);
-  var out = {};
+function normalizeOddsHistorySnapshot_(input, rowIndex) {
+  var snap = input || {};
+  var capturedAtLocal = String(snap.captured_at_local || "");
+  var capturedAtUtc = String(snap.captured_at_utc || "");
+  var capturedAtMs = Date.parse(capturedAtUtc || capturedAtLocal);
+  var commenceUtc = String(snap.commence_time_utc || "");
+  return {
+    away_price: toFloat_(snap.away_price !== undefined ? snap.away_price : snap.away_odds_decimal, NaN),
+    home_price: toFloat_(snap.home_price !== undefined ? snap.home_price : snap.home_odds_decimal, NaN),
+    away_implied: toFloat_(snap.away_implied, NaN),
+    home_implied: toFloat_(snap.home_implied, NaN),
+    commence_time_utc: commenceUtc,
+    captured_at_local: capturedAtLocal,
+    captured_at_utc: capturedAtUtc,
+    captured_at_ms: isFinite(capturedAtMs) ? capturedAtMs : NaN,
+    row_index: toInt_(rowIndex, 0)
+  };
+}
+
+function compareOddsSnapshots_(a, b) {
+  var aMs = isFinite(a.captured_at_ms) ? a.captured_at_ms : -Infinity;
+  var bMs = isFinite(b.captured_at_ms) ? b.captured_at_ms : -Infinity;
+  if (aMs !== bMs) return aMs - bMs;
+  return Number(a.row_index || 0) - Number(b.row_index || 0);
+}
+
+function getOddsHistoryIndexCache_() {
+  var props = PropertiesService.getScriptProperties();
+  var raw = props.getProperty(PROP.ODDS_HISTORY_INDEX) || "";
+  if (!raw) return { ok: false, reason: "missing", index: null };
+  try {
+    var parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || !parsed.by_id) return { ok: false, reason: "invalid_shape", index: null };
+    return { ok: true, reason: "hit", index: parsed };
+  } catch (e) {
+    return { ok: false, reason: "parse_error", index: null, error: String(e) };
+  }
+}
+
+function persistOddsHistoryIndexCache_(indexObj) {
+  if (!indexObj) return;
+  var payload = JSON.stringify(indexObj);
+  PropertiesService.getScriptProperties().setProperty(PROP.ODDS_HISTORY_INDEX, payload);
+}
+
+function buildOddsHistoryIndexFromRows_(rows, preStartMin) {
+  var targetPreStartMin = Math.max(0, toInt_(preStartMin, 15));
+  var cutoffOffsetMs = targetPreStartMin * 60000;
+  var out = {
+    version: 1,
+    pre_start_min: targetPreStartMin,
+    built_at_ms: Date.now(),
+    by_id: {}
+  };
+
   for (var i = 0; i < rows.length; i++) {
     var r = rows[i] || {};
-    var oddsId = String(r.odds_game_id || "");
-    if (!oddsId || out[oddsId]) continue;
-    out[oddsId] = {
-      away_price: toFloat_(r.away_odds_decimal, NaN),
-      home_price: toFloat_(r.home_odds_decimal, NaN),
-      away_implied: toFloat_(r.away_implied, NaN),
-      home_implied: toFloat_(r.home_implied, NaN),
-      commence_time_utc: String(r.commence_time_utc || "")
-    };
+    var oddsId = String(r.odds_game_id || "").trim();
+    if (!oddsId) continue;
+
+    var snap = normalizeOddsHistorySnapshot_(r, i);
+    if (!out.by_id[oddsId]) out.by_id[oddsId] = { open: null, latest: null, close_cutoff: null, close_reason: "", commence_time_utc: "" };
+    var entry = out.by_id[oddsId];
+
+    if (!entry.open) entry.open = snap;
+    if (!entry.latest || compareOddsSnapshots_(snap, entry.latest) >= 0) entry.latest = snap;
+    if (snap.commence_time_utc) entry.commence_time_utc = snap.commence_time_utc;
+
+    var commenceMs = Date.parse(String(snap.commence_time_utc || entry.commence_time_utc || ""));
+    var cutoffMs = isFinite(commenceMs) ? (commenceMs - cutoffOffsetMs) : NaN;
+    if (!isFinite(cutoffMs)) {
+      if (!entry.close_cutoff || compareOddsSnapshots_(snap, entry.close_cutoff) >= 0) entry.close_cutoff = snap;
+    } else if (isFinite(snap.captured_at_ms) && snap.captured_at_ms <= cutoffMs) {
+      if (!entry.close_cutoff || compareOddsSnapshots_(snap, entry.close_cutoff) >= 0) entry.close_cutoff = snap;
+    }
+  }
+
+  var ids = Object.keys(out.by_id);
+  for (var j = 0; j < ids.length; j++) {
+    var id = ids[j];
+    var e = out.by_id[id];
+    e.close_reason = e.close_cutoff ? "" : "close_no_snapshot_before_cutoff";
+  }
+
+  return out;
+}
+
+function rebuildOddsHistoryIndexCache_(preStartMin, reason) {
+  var ss = SpreadsheetApp.getActive();
+  var sh = ss.getSheetByName(SH.ODDS_HISTORY);
+  if (!sh) return { version: 1, pre_start_min: Math.max(0, toInt_(preStartMin, 15)), built_at_ms: Date.now(), by_id: {} };
+  var rows = readSheetAsObjects_(sh);
+  var indexObj = buildOddsHistoryIndexFromRows_(rows, preStartMin);
+  persistOddsHistoryIndexCache_(indexObj);
+  log_("INFO", "Odds history index rebuilt", {
+    reasonCode: String(reason || "rebuild_requested"),
+    gamesIndexed: Object.keys(indexObj.by_id || {}).length,
+    rowsScanned: rows.length,
+    preStartMin: indexObj.pre_start_min
+  });
+  return indexObj;
+}
+
+function getOddsHistoryIndexOrRebuild_(preStartMin) {
+  var targetPreStartMin = Math.max(0, toInt_(preStartMin, 15));
+  var cacheRes = getOddsHistoryIndexCache_();
+  if (!cacheRes.ok) {
+    log_("INFO", "Odds history index cache miss", { reasonCode: cacheRes.reason || "missing" });
+    return rebuildOddsHistoryIndexCache_(targetPreStartMin, "cache_" + String(cacheRes.reason || "miss"));
+  }
+
+  var indexObj = cacheRes.index;
+  if (toInt_(indexObj.pre_start_min, targetPreStartMin) !== targetPreStartMin) {
+    log_("INFO", "Odds history index cache miss", {
+      reasonCode: "prestart_mismatch",
+      cachedPreStartMin: toInt_(indexObj.pre_start_min, targetPreStartMin),
+      requestedPreStartMin: targetPreStartMin
+    });
+    return rebuildOddsHistoryIndexCache_(targetPreStartMin, "prestart_mismatch");
+  }
+
+  log_("INFO", "Odds history index cache hit", {
+    gamesIndexed: Object.keys(indexObj.by_id || {}).length,
+    preStartMin: targetPreStartMin
+  });
+  return indexObj;
+}
+
+function updateOddsHistoryIndexIncremental_(historyRows, preStartMin) {
+  if (!historyRows || !historyRows.length) return;
+  var targetPreStartMin = Math.max(0, toInt_(preStartMin, 15));
+  var cacheRes = getOddsHistoryIndexCache_();
+  var indexObj = null;
+
+  if (!cacheRes.ok) {
+    log_("INFO", "Odds history index incremental update cache miss", { reasonCode: cacheRes.reason || "missing" });
+    indexObj = rebuildOddsHistoryIndexCache_(targetPreStartMin, "incremental_cache_miss");
+    return indexObj;
+  }
+
+  if (toInt_(cacheRes.index.pre_start_min, targetPreStartMin) !== targetPreStartMin) {
+    log_("INFO", "Odds history index incremental update prestart mismatch", {
+      cachedPreStartMin: toInt_(cacheRes.index.pre_start_min, targetPreStartMin),
+      requestedPreStartMin: targetPreStartMin
+    });
+    indexObj = rebuildOddsHistoryIndexCache_(targetPreStartMin, "incremental_prestart_mismatch");
+    return indexObj;
+  }
+
+  indexObj = cacheRes.index;
+
+  for (var i = 0; i < historyRows.length; i++) {
+    var hr = historyRows[i] || [];
+    var oddsId = String(hr[1] || "").trim();
+    if (!oddsId) continue;
+
+    var snap = normalizeOddsHistorySnapshot_({
+      captured_at_local: String(hr[0] || ""),
+      odds_game_id: oddsId,
+      commence_time_utc: String(hr[2] || ""),
+      away_odds_decimal: hr[5],
+      home_odds_decimal: hr[6],
+      away_implied: hr[7],
+      home_implied: hr[8]
+    }, Date.now() + i);
+
+    if (!indexObj.by_id[oddsId]) indexObj.by_id[oddsId] = { open: null, latest: null, close_cutoff: null, close_reason: "", commence_time_utc: "" };
+    var entry = indexObj.by_id[oddsId];
+    if (!entry.open) entry.open = snap;
+    if (!entry.latest || compareOddsSnapshots_(snap, entry.latest) >= 0) entry.latest = snap;
+    if (snap.commence_time_utc) entry.commence_time_utc = snap.commence_time_utc;
+
+    var commenceMs = Date.parse(String(snap.commence_time_utc || entry.commence_time_utc || ""));
+    var cutoffMs = isFinite(commenceMs) ? (commenceMs - (targetPreStartMin * 60000)) : NaN;
+    if (!isFinite(cutoffMs)) {
+      if (!entry.close_cutoff || compareOddsSnapshots_(snap, entry.close_cutoff) >= 0) entry.close_cutoff = snap;
+    } else if (isFinite(snap.captured_at_ms) && snap.captured_at_ms <= cutoffMs) {
+      if (!entry.close_cutoff || compareOddsSnapshots_(snap, entry.close_cutoff) >= 0) entry.close_cutoff = snap;
+    }
+    entry.close_reason = entry.close_cutoff ? "" : "close_no_snapshot_before_cutoff";
+  }
+
+  indexObj.pre_start_min = targetPreStartMin;
+  indexObj.built_at_ms = Date.now();
+  persistOddsHistoryIndexCache_(indexObj);
+  log_("INFO", "Odds history index incremental update completed", {
+    appendedRows: historyRows.length,
+    gamesIndexed: Object.keys(indexObj.by_id || {}).length,
+    preStartMin: targetPreStartMin
+  });
+  return indexObj;
+}
+
+function getSignalLogOpenSnapshotByOddsId_() {
+  var cfg = getConfig_();
+  var preStartMin = Math.max(0, toInt_(cfg.SIGNAL_CLOSE_PRESTART_MIN, 15));
+  var indexObj = getOddsHistoryIndexOrRebuild_(preStartMin);
+  var out = {};
+  var byId = indexObj.by_id || {};
+  var ids = Object.keys(byId);
+  for (var i = 0; i < ids.length; i++) {
+    var oddsId = ids[i];
+    if (byId[oddsId] && byId[oddsId].open) out[oddsId] = byId[oddsId].open;
   }
   return out;
 }
@@ -981,88 +1167,37 @@ function maybeNotifyDiscord_(cfg, oddsId, dateKey, payload) {
 }
 
 
-function getCloseSourceSnapshotsByGameId_() {
-  var ss = SpreadsheetApp.getActive();
-  var sh = ss.getSheetByName(SH.ODDS_HISTORY);
-  if (!sh) return {};
-  var rows = readSheetAsObjects_(sh);
-  var out = {};
-  for (var i = 0; i < rows.length; i++) {
-    var r = rows[i] || {};
-    var oddsId = String(r.odds_game_id || "");
-    if (!oddsId) continue;
-    var capturedAtLocal = String(r.captured_at_local || "");
-    var capturedAtUtc = String(r.captured_at_utc || "");
-    var capturedAtMs = Date.parse(capturedAtUtc || capturedAtLocal);
-    if (!out[oddsId]) out[oddsId] = [];
-    out[oddsId].push({
-      away_price: toFloat_(r.away_odds_decimal, NaN),
-      home_price: toFloat_(r.home_odds_decimal, NaN),
-      away_implied: toFloat_(r.away_implied, NaN),
-      home_implied: toFloat_(r.home_implied, NaN),
-      commence_time_utc: String(r.commence_time_utc || ""),
-      captured_at_local: capturedAtLocal,
-      captured_at_utc: capturedAtUtc,
-      captured_at_ms: isFinite(capturedAtMs) ? capturedAtMs : NaN,
-      row_index: i
-    });
-  }
-  return out;
+function getCloseSourceSnapshotsByGameId_(preStartMin) {
+  return getOddsHistoryIndexOrRebuild_(preStartMin);
 }
 
-function selectCloseSnapshotsByGameId_(snapshotsByOddsId, preStartMin, nowMs) {
+function selectCloseSnapshotsByGameId_(historyIndex, preStartMin, nowMs) {
   var out = {};
+  var byId = (historyIndex && historyIndex.by_id) ? historyIndex.by_id : {};
+  var ids = Object.keys(byId);
   var cutoffOffsetMs = Math.max(0, Number(preStartMin) || 0) * 60000;
-  var ids = Object.keys(snapshotsByOddsId || {});
+
   for (var i = 0; i < ids.length; i++) {
     var oddsId = ids[i];
-    var snapshots = (snapshotsByOddsId[oddsId] || []).slice(0);
-    if (!snapshots.length) {
-      out[oddsId] = { snapshot: null, reason: "close_no_snapshot_before_cutoff" };
-      continue;
-    }
-
-    snapshots.sort(function (a, b) {
-      var aMs = isFinite(a.captured_at_ms) ? a.captured_at_ms : -Infinity;
-      var bMs = isFinite(b.captured_at_ms) ? b.captured_at_ms : -Infinity;
-      if (aMs !== bMs) return aMs - bMs;
-      return Number(a.row_index || 0) - Number(b.row_index || 0);
-    });
-
-    var commenceMs = NaN;
-    for (var s = snapshots.length - 1; s >= 0; s--) {
-      var parsedCommence = Date.parse(String(snapshots[s].commence_time_utc || ""));
-      if (isFinite(parsedCommence)) {
-        commenceMs = parsedCommence;
-        break;
-      }
-    }
+    var entry = byId[oddsId] || {};
+    var latest = entry.latest || null;
+    var cutoffSnap = entry.close_cutoff || null;
+    var commenceMs = Date.parse(String((latest && latest.commence_time_utc) || entry.commence_time_utc || ""));
     var cutoffMs = isFinite(commenceMs) ? (commenceMs - cutoffOffsetMs) : NaN;
+
     if (isFinite(cutoffMs) && isFinite(nowMs) && nowMs < cutoffMs) {
       out[oddsId] = { snapshot: null, reason: "close_still_too_early", cutoff_ms: cutoffMs };
       continue;
     }
 
-    var selected = null;
-    for (var j = snapshots.length - 1; j >= 0; j--) {
-      var snap = snapshots[j];
-      if (!isFinite(cutoffMs)) {
-        selected = snap;
-        break;
-      }
-      if (isFinite(snap.captured_at_ms) && snap.captured_at_ms <= cutoffMs) {
-        selected = snap;
-        break;
-      }
-    }
-
-    if (!selected) {
-      out[oddsId] = { snapshot: null, reason: "close_no_snapshot_before_cutoff", cutoff_ms: cutoffMs };
+    if (!cutoffSnap) {
+      out[oddsId] = { snapshot: null, reason: String(entry.close_reason || "close_no_snapshot_before_cutoff"), cutoff_ms: cutoffMs };
       continue;
     }
 
-    out[oddsId] = { snapshot: selected, reason: "" };
+    out[oddsId] = { snapshot: cutoffSnap, reason: "", cutoff_ms: cutoffMs };
   }
+
   return out;
 }
 
@@ -1092,7 +1227,7 @@ function updateSignalLogCloseMetrics() {
   var cfg = getConfig_();
   var preStartMin = Math.max(0, toInt_(cfg.SIGNAL_CLOSE_PRESTART_MIN, 15));
   var nowMs = Date.now();
-  var closeSourceByOddsId = getCloseSourceSnapshotsByGameId_();
+  var closeSourceByOddsId = getCloseSourceSnapshotsByGameId_(preStartMin);
   var selectedCloseByOddsId = selectCloseSnapshotsByGameId_(closeSourceByOddsId, preStartMin, nowMs);
   var updatedRows = 0;
   var skippedRows = 0;
