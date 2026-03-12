@@ -102,11 +102,14 @@ function fetchOddsData_(apiKey, cfg, sportKey, fromIso, toIso) {
   var resp = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
   var http = resp.getResponseCode();
   var headers = resp.getAllHeaders() || {};
+  var used = parseOddsApiHeaderInt_(headers, "x-requests-used");
+  var remaining = parseOddsApiHeaderInt_(headers, "x-requests-remaining");
   log_("INFO", "Odds API credits", {
-    used: String(headers["x-requests-used"] || headers["X-Requests-Used"] || ""),
-    remaining: String(headers["x-requests-remaining"] || headers["X-Requests-Remaining"] || ""),
+    used: used,
+    remaining: remaining,
     http: http
   });
+  maybeSendOddsCreditsLowAlert_(cfg, remaining, used, http, sportKey);
 
   if (http !== 200) {
     log_("ERROR", "Odds API fetch failed", { http: http, body: resp.getContentText().slice(0, 500) });
@@ -115,6 +118,106 @@ function fetchOddsData_(apiKey, cfg, sportKey, fromIso, toIso) {
 
   try { return JSON.parse(resp.getContentText()) || []; }
   catch (e) { log_("ERROR", "Odds API JSON parse failed", { message: String(e) }); return []; }
+}
+
+
+function parseOddsApiHeaderInt_(headers, keyLower) {
+  var normalizedKey = String(keyLower || "").toLowerCase();
+  var raw = "";
+  var keys = Object.keys(headers || {});
+  for (var i = 0; i < keys.length; i++) {
+    var k = String(keys[i] || "");
+    if (k.toLowerCase() === normalizedKey) { raw = headers[k]; break; }
+  }
+  var n = Number(raw);
+  return isFinite(n) ? n : "";
+}
+
+function maybeSendOddsCreditsLowAlert_(cfg, remaining, used, http, sportKey) {
+  if (!isFinite(Number(remaining))) {
+    log_("INFO", "Odds credits alert suppressed", { reasonCode: "remaining_missing_or_non_numeric", remaining: remaining, used: used, http: http, sportKeyUsed: sportKey });
+    return;
+  }
+
+  var threshold = Math.max(0, toInt_(cfg.ODDS_ALERT_REMAINING_THRESHOLD, 75));
+  if (Number(remaining) > threshold) {
+    log_("INFO", "Odds credits alert suppressed", { reasonCode: "remaining_above_threshold", remaining: remaining, threshold: threshold, used: used, http: http, sportKeyUsed: sportKey });
+    return;
+  }
+
+  var forceEveryCall = cfg.ODDS_ALERT_ON_EVERY_CALL_UNDER_THRESHOLD === true;
+  var cooldownMin = Math.max(0, toInt_(cfg.ODDS_ALERT_COOLDOWN_MIN, 180));
+  var nowMs = Date.now();
+  var props = PropertiesService.getScriptProperties();
+  var lastSentAtMs = Math.max(0, toInt_(props.getProperty(PROP.ODDS_ALERT_LAST_SENT_AT_MS), 0));
+  var elapsedMin = lastSentAtMs > 0 ? ((nowMs - lastSentAtMs) / 60000) : null;
+
+  if (!forceEveryCall && lastSentAtMs > 0 && elapsedMin < cooldownMin) {
+    log_("INFO", "Odds credits alert suppressed", {
+      reasonCode: "cooldown_active",
+      remaining: remaining,
+      used: used,
+      threshold: threshold,
+      cooldownMin: cooldownMin,
+      elapsedMin: round_(elapsedMin, 2),
+      http: http,
+      sportKeyUsed: sportKey
+    });
+    return;
+  }
+
+  var cfgLive = getConfig_();
+  var deliveryMode = discordDeliveryMode_(cfgLive, { allowWebhook: true });
+  if (deliveryMode.mode === "missing") {
+    log_("WARN", "Odds credits alert suppressed", {
+      reasonCode: "discord_delivery_missing",
+      remaining: remaining,
+      used: used,
+      threshold: threshold,
+      cooldownMin: cooldownMin,
+      forceEveryCall: forceEveryCall,
+      http: http,
+      sportKeyUsed: sportKey
+    });
+    return;
+  }
+
+  var tsLocal = isoLocalWithOffset_(new Date());
+  var payload = {
+    content:
+      "⚠️ **Odds API credits running low**\n" +
+      "Remaining: **" + String(remaining) + "** (threshold: " + String(threshold) + ")\n" +
+      "Used: **" + String(used) + "**\n" +
+      "Timestamp: " + tsLocal + "\n" +
+      "Sport key: `" + String(sportKey || "") + "`\n" +
+      "Action required: rotate the Odds API key manually before credits are exhausted."
+  };
+
+
+  var res = sendDiscordByMode_(deliveryMode, payload);
+  var ok = (res.http >= 200 && res.http < 300);
+  var detail = {
+    remaining: remaining,
+    used: used,
+    threshold: threshold,
+    cooldownMin: cooldownMin,
+    forceEveryCall: forceEveryCall,
+    http: http,
+    sportKeyUsed: sportKey,
+    discordHttp: res.http,
+    discordDeliveryMode: res.deliveryMode,
+    discordBody: String(res.body || "").slice(0, 300)
+  };
+  if (ok) {
+    props.setProperty(PROP.ODDS_ALERT_LAST_SENT_AT_MS, String(nowMs));
+    detail.alertTimestampLocal = tsLocal;
+    detail.lastSentAtMs = nowMs;
+    log_("WARN", "Odds credits alert emitted", detail);
+    return;
+  }
+
+  detail.reasonCode = "discord_send_failed";
+  log_("WARN", "Odds credits alert failed", detail);
 }
 
 function pickBestH2H_(bookmakers, awayTeam, homeTeam) {
