@@ -24,6 +24,7 @@ function setup() {
   }
   getOrCreateSheet_(ss, SH.CALIBRATION_SNAPSHOTS);
   getOrCreateSheet_(ss, SH.CALIBRATION_REPORT);
+  getOrCreateSheet_(ss, SH.CALIBRATION_TRENDS);
 
   ensureLogHeader_(ss.getSheetByName(SH.LOG));
   ensureRunSummaryLogHeader_(ss.getSheetByName(SH.RUN_SUMMARY_LOG));
@@ -43,6 +44,7 @@ function setup() {
   }
   ensureCalibrationSnapshotsHeader_(ss.getSheetByName(SH.CALIBRATION_SNAPSHOTS));
   ensureCalibrationReportHeader_(ss.getSheetByName(SH.CALIBRATION_REPORT));
+  ensureCalibrationTrendHeader_(ss.getSheetByName(SH.CALIBRATION_TRENDS));
 
   log_("INFO", "Sheets created/verified.", {
     script_tz: Session.getScriptTimeZone(),
@@ -55,7 +57,7 @@ function resetWorkbook() {
   var names = [
     SH.LOG, SH.RUN_SUMMARY_LOG, SH.ODDS_RAW, SH.ODDS_HISTORY, SH.MLB_SCHEDULE, SH.MLB_LINEUPS,
     SH.BATTER_PROJ, SH.PITCHER_PROJ, SH.EDGE_BOARD, SH.SIGNAL_LOG, SH.PLAYER_MAP, SH.NOTIFY_STATE,
-    SH.CALIBRATION_SNAPSHOTS, SH.CALIBRATION_REPORT
+    SH.CALIBRATION_SNAPSHOTS, SH.CALIBRATION_REPORT, SH.CALIBRATION_TRENDS
   ];
   if (isBetTrackingEnabled_()) {
     names.push(BET_TRACKING_SHEETS.BET_LOG);
@@ -84,6 +86,7 @@ function resetWorkbook() {
   }
   getOrCreateSheet_(ss, SH.CALIBRATION_SNAPSHOTS);
   getOrCreateSheet_(ss, SH.CALIBRATION_REPORT);
+  getOrCreateSheet_(ss, SH.CALIBRATION_TRENDS);
 
   ensureLogHeader_(ss.getSheetByName(SH.LOG));
   ensureRunSummaryLogHeader_(ss.getSheetByName(SH.RUN_SUMMARY_LOG));
@@ -103,6 +106,7 @@ function resetWorkbook() {
   }
   ensureCalibrationSnapshotsHeader_(ss.getSheetByName(SH.CALIBRATION_SNAPSHOTS));
   ensureCalibrationReportHeader_(ss.getSheetByName(SH.CALIBRATION_REPORT));
+  ensureCalibrationTrendHeader_(ss.getSheetByName(SH.CALIBRATION_TRENDS));
 
   var props = PropertiesService.getScriptProperties();
   var all = props.getProperties();
@@ -263,5 +267,11 @@ function ensureCalibrationSnapshotsHeader_(sh) {
 function ensureCalibrationReportHeader_(sh) {
   setHeader_(sh, [
     "run_at_local","window_days","sample_size","resolved_count","pending_count","report_json","summary"
+  ]);
+}
+
+function ensureCalibrationTrendHeader_(sh) {
+  setHeader_(sh, [
+    "run_at_local","window_days","feature_set","resolved_count","win_rate","roi","brier_model","brier_market","brier_delta_vs_market","win_rate_delta_vs_baseline","roi_delta_vs_baseline","brier_delta_vs_baseline","alert_codes","alert_summary"
   ]);
 }
