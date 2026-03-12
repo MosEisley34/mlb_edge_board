@@ -350,6 +350,22 @@ function readSheetAsObjects_(sheet) {
   }
   return out;
 }
+function getOpeningOddsByGameId_() {
+  var ss = SpreadsheetApp.getActive();
+  var sh = ss.getSheetByName(SH.ODDS_HISTORY);
+  if (!sh) return {};
+
+  var rows = readSheetAsObjects_(sh);
+  var out = {};
+  for (var i = 0; i < rows.length; i++) {
+    var r = rows[i] || {};
+    var gameId = String(r.odds_game_id || "").trim();
+    if (!gameId || out[gameId]) continue;
+    out[gameId] = r;
+  }
+  return out;
+}
+
 
 /* ===================== SMALL UTILS ===================== */
 

@@ -22,18 +22,26 @@ function refreshOdds_(cfg) {
 
   var ss = SpreadsheetApp.getActive();
   var shOdds = ss.getSheetByName(SH.ODDS_RAW);
+  var shOddsHistory = ss.getSheetByName(SH.ODDS_HISTORY) || getOrCreateSheet_(ss, SH.ODDS_HISTORY);
+  ensureOddsHistoryHeader_(shOddsHistory);
   var nowLocal = isoLocalWithOffset_(new Date());
 
   var rows = [];
+  var historyRows = [];
   for (var i = 0; i < data.length; i++) {
     var g = data[i];
     var best = pickBestH2H_(g.bookmakers || [], g.away_team, g.home_team);
 
+    var gameId = String(g.id || "");
+    var commenceUtc = String(g.commence_time || "");
+    var awayTeam = String(g.away_team || "");
+    var homeTeam = String(g.home_team || "");
+
     rows.push([
-      String(g.id || ""),
-      String(g.commence_time || ""),
-      String(g.away_team || ""),
-      String(g.home_team || ""),
+      gameId,
+      commenceUtc,
+      awayTeam,
+      homeTeam,
       best.awayDecimal,
       best.homeDecimal,
       best.awayImplied,
@@ -43,10 +51,28 @@ function refreshOdds_(cfg) {
       nowLocal,
       sportKeyUsed
     ]);
+
+    historyRows.push([
+      nowLocal,
+      gameId,
+      commenceUtc,
+      awayTeam,
+      homeTeam,
+      best.awayDecimal,
+      best.homeDecimal,
+      best.awayImplied,
+      best.homeImplied,
+      best.bestBookAway,
+      best.bestBookHome,
+      sportKeyUsed
+    ]);
   }
 
   replaceSheetBody_(shOdds, rows);
-  log_("INFO", "refreshOdds completed", { sportKeyUsed: sportKeyUsed, games: rows.length, windowHours: lookaheadH, from: fromIso, to: toIso });
+  if (historyRows.length > 0) {
+    shOddsHistory.getRange(shOddsHistory.getLastRow() + 1, 1, historyRows.length, historyRows[0].length).setValues(historyRows);
+  }
+  log_("INFO", "refreshOdds completed", { sportKeyUsed: sportKeyUsed, games: rows.length, historyRowsAppended: historyRows.length, windowHours: lookaheadH, from: fromIso, to: toIso });
   return { sportKeyUsed: sportKeyUsed, games: rows.length, updatedAt: nowLocal };
 }
 

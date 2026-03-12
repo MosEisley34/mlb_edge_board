@@ -8,6 +8,7 @@ function setup() {
 
   getOrCreateSheet_(ss, SH.LOG);
   getOrCreateSheet_(ss, SH.ODDS_RAW);
+  getOrCreateSheet_(ss, SH.ODDS_HISTORY);
   getOrCreateSheet_(ss, SH.MLB_SCHEDULE);
   getOrCreateSheet_(ss, SH.MLB_LINEUPS);
   getOrCreateSheet_(ss, SH.BATTER_PROJ);
@@ -24,6 +25,7 @@ function setup() {
 
   ensureLogHeader_(ss.getSheetByName(SH.LOG));
   ensureOddsHeader_(ss.getSheetByName(SH.ODDS_RAW));
+  ensureOddsHistoryHeader_(ss.getSheetByName(SH.ODDS_HISTORY));
   ensureScheduleHeader_(ss.getSheetByName(SH.MLB_SCHEDULE));
   ensureLineupsHeader_(ss.getSheetByName(SH.MLB_LINEUPS));
   ensureBatterProjHeader_(ss.getSheetByName(SH.BATTER_PROJ));
@@ -47,7 +49,7 @@ function setup() {
 function resetWorkbook() {
   var ss = SpreadsheetApp.getActive();
   var names = [
-    SH.LOG, SH.ODDS_RAW, SH.MLB_SCHEDULE, SH.MLB_LINEUPS,
+    SH.LOG, SH.ODDS_RAW, SH.ODDS_HISTORY, SH.MLB_SCHEDULE, SH.MLB_LINEUPS,
     SH.BATTER_PROJ, SH.PITCHER_PROJ, SH.EDGE_BOARD, SH.PLAYER_MAP, SH.NOTIFY_STATE,
     SH.CALIBRATION_SNAPSHOTS, SH.CALIBRATION_REPORT
   ];
@@ -62,6 +64,7 @@ function resetWorkbook() {
 
   getOrCreateSheet_(ss, SH.LOG);
   getOrCreateSheet_(ss, SH.ODDS_RAW);
+  getOrCreateSheet_(ss, SH.ODDS_HISTORY);
   getOrCreateSheet_(ss, SH.MLB_SCHEDULE);
   getOrCreateSheet_(ss, SH.MLB_LINEUPS);
   getOrCreateSheet_(ss, SH.BATTER_PROJ);
@@ -78,6 +81,7 @@ function resetWorkbook() {
 
   ensureLogHeader_(ss.getSheetByName(SH.LOG));
   ensureOddsHeader_(ss.getSheetByName(SH.ODDS_RAW));
+  ensureOddsHistoryHeader_(ss.getSheetByName(SH.ODDS_HISTORY));
   ensureScheduleHeader_(ss.getSheetByName(SH.MLB_SCHEDULE));
   ensureLineupsHeader_(ss.getSheetByName(SH.MLB_LINEUPS));
   ensureBatterProjHeader_(ss.getSheetByName(SH.BATTER_PROJ));
@@ -130,6 +134,14 @@ function ensureOddsHeader_(sh) {
     "odds_game_id","commence_time_utc","away_team","home_team",
     "away_odds_decimal","home_odds_decimal","away_implied","home_implied",
     "best_book_away","best_book_home","updated_at_local","sport_key_used"
+  ]);
+}
+
+function ensureOddsHistoryHeader_(sh) {
+  setHeader_(sh, [
+    "captured_at_local","odds_game_id","commence_time_utc","away_team","home_team",
+    "away_odds_decimal","home_odds_decimal","away_implied","home_implied",
+    "best_book_away","best_book_home","sport_key_used"
   ]);
 }
 
