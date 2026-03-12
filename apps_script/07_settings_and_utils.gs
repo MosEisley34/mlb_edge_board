@@ -18,6 +18,10 @@ function ensureSettings_(sh) {
     ["PIPELINE_DEGRADE_LEVEL2_THRESHOLD", "6", "Consecutive zero-data runs before strongest degraded cadence"],
     ["PIPELINE_DEGRADE_MINUTES_L1", "30", "Pipeline cadence minutes while degraded level 1 is active"],
     ["PIPELINE_DEGRADE_MINUTES_L2", "60", "Pipeline cadence minutes while degraded level 2 is active"],
+    ["PIPELINE_CREDIT_WARNING_THRESHOLD", "75", "Apply slower cadence when remaining credits fall below this threshold"],
+    ["PIPELINE_CREDIT_CRITICAL_THRESHOLD", "25", "Apply very slow cadence when remaining credits are near depletion"],
+    ["PIPELINE_DEGRADE_MINUTES_CREDIT_WARNING", "30", "Pipeline cadence minutes while credit pressure warning is active"],
+    ["PIPELINE_DEGRADE_MINUTES_CREDIT_CRITICAL", "60", "Pipeline cadence minutes while credit pressure is critical"],
 
     ["HEARTBEAT_MODE", "DAILY", "OFF / DAILY / HOURLY"],
     ["HEARTBEAT_HOUR", "9", "Daily heartbeat hour (script timezone)"],
@@ -171,6 +175,10 @@ function getConfig_() {
   cfg.PIPELINE_DEGRADE_LEVEL2_THRESHOLD = toInt_(cfg.PIPELINE_DEGRADE_LEVEL2_THRESHOLD, 6);
   cfg.PIPELINE_DEGRADE_MINUTES_L1 = toInt_(cfg.PIPELINE_DEGRADE_MINUTES_L1, 30);
   cfg.PIPELINE_DEGRADE_MINUTES_L2 = toInt_(cfg.PIPELINE_DEGRADE_MINUTES_L2, 60);
+  cfg.PIPELINE_CREDIT_WARNING_THRESHOLD = Math.max(0, toInt_(cfg.PIPELINE_CREDIT_WARNING_THRESHOLD, 75));
+  cfg.PIPELINE_CREDIT_CRITICAL_THRESHOLD = Math.max(0, toInt_(cfg.PIPELINE_CREDIT_CRITICAL_THRESHOLD, 25));
+  cfg.PIPELINE_DEGRADE_MINUTES_CREDIT_WARNING = toInt_(cfg.PIPELINE_DEGRADE_MINUTES_CREDIT_WARNING, 30);
+  cfg.PIPELINE_DEGRADE_MINUTES_CREDIT_CRITICAL = toInt_(cfg.PIPELINE_DEGRADE_MINUTES_CREDIT_CRITICAL, 60);
   cfg.HEARTBEAT_MODE = String(cfg.HEARTBEAT_MODE || "DAILY").toUpperCase();
   cfg.HEARTBEAT_HOUR = toInt_(cfg.HEARTBEAT_HOUR, 9);
   cfg.HEARTBEAT_MINUTE = toInt_(cfg.HEARTBEAT_MINUTE, 5);

@@ -34,6 +34,7 @@ function installTriggers() {
 
     props.setProperty(PROP.PIPELINE_ZERO_STREAK, "0");
     props.setProperty(PROP.PIPELINE_CADENCE_MODE, "NORMAL");
+    props.setProperty(PROP.PIPELINE_CADENCE_REASON, "healthy");
 
     var runDecision = maybeRunPipelineAfterInstall_(cfg, cadenceUpdate);
 
@@ -836,49 +837,95 @@ function updatePipelineCadenceState_(cfg, props, matchedCount, computedCount) {
   var level2Requested = Math.max(level1Requested, toInt_(cfg.PIPELINE_DEGRADE_MINUTES_L2, 60));
   var level2Mins = normalizePipelineTriggerCadenceMinutes_(level2Requested);
 
+  var creditWarningThreshold = Math.max(0, toInt_(cfg.PIPELINE_CREDIT_WARNING_THRESHOLD, 75));
+  var creditCriticalThreshold = Math.max(0, toInt_(cfg.PIPELINE_CREDIT_CRITICAL_THRESHOLD, 25));
+  if (creditCriticalThreshold > creditWarningThreshold) creditCriticalThreshold = creditWarningThreshold;
+
+  var creditWarningRequested = Math.max(baseMinsRequested, toInt_(cfg.PIPELINE_DEGRADE_MINUTES_CREDIT_WARNING, 30));
+  var creditWarningMins = normalizePipelineTriggerCadenceMinutes_(creditWarningRequested);
+  var creditCriticalRequested = Math.max(creditWarningRequested, toInt_(cfg.PIPELINE_DEGRADE_MINUTES_CREDIT_CRITICAL, 60));
+  var creditCriticalMins = normalizePipelineTriggerCadenceMinutes_(creditCriticalRequested);
+
+  var remainingRaw = props.getProperty(PROP.ODDS_LAST_REMAINING_CREDITS);
+  var remainingCredits = isFinite(Number(remainingRaw)) ? Math.max(0, toInt_(remainingRaw, 0)) : null;
+  var creditPressureLevel = "NONE";
+  if (remainingCredits !== null && remainingCredits <= creditCriticalThreshold) {
+    creditPressureLevel = "CRITICAL";
+  } else if (remainingCredits !== null && remainingCredits <= creditWarningThreshold) {
+    creditPressureLevel = "WARNING";
+  }
+
   var desiredMode = "NORMAL";
   var desiredMinutes = baseMins;
   var desiredRequestedMinutes = baseMinsRequested;
+  var cadenceReason = "healthy";
+
   if (streak >= level2Threshold) {
     desiredMode = "DEGRADED_L2";
     desiredMinutes = level2Mins;
     desiredRequestedMinutes = level2Requested;
+    cadenceReason = "zero_data_streak";
   } else if (streak >= level1Threshold) {
     desiredMode = "DEGRADED_L1";
     desiredMinutes = level1Mins;
     desiredRequestedMinutes = level1Requested;
+    cadenceReason = "zero_data_streak";
+  }
+
+  if (creditPressureLevel === "CRITICAL" && creditCriticalMins >= desiredMinutes) {
+    desiredMode = "CREDIT_PROTECTION_CRITICAL";
+    desiredMinutes = creditCriticalMins;
+    desiredRequestedMinutes = creditCriticalRequested;
+    cadenceReason = "credit_protection";
+  } else if (creditPressureLevel === "WARNING" && creditWarningMins >= desiredMinutes) {
+    desiredMode = "CREDIT_PROTECTION_WARNING";
+    desiredMinutes = creditWarningMins;
+    desiredRequestedMinutes = creditWarningRequested;
+    cadenceReason = "credit_protection";
   }
 
   var prevMode = String(props.getProperty(PROP.PIPELINE_CADENCE_MODE) || "NORMAL");
+  var prevReason = String(props.getProperty(PROP.PIPELINE_CADENCE_REASON) || "healthy");
   var prevMinutes = normalizePipelineTriggerCadenceMinutes_(toInt_(props.getProperty(PROP.PIPELINE_CADENCE_MINUTES), baseMins));
 
   if (prevMode !== desiredMode || prevMinutes !== desiredMinutes) {
     ensurePipelineTriggerCadence_(desiredRequestedMinutes, "auto_degrade", {
       previousMode: prevMode,
+      previousReason: prevReason,
       newMode: desiredMode,
+      newReason: cadenceReason,
       zeroDataRun: zeroDataRun,
       zeroStreak: streak,
       matched: matched,
-      computed: computed
+      computed: computed,
+      remainingCredits: remainingCredits,
+      creditPressureLevel: creditPressureLevel
     });
   }
 
   props.setProperty(PROP.PIPELINE_CADENCE_MODE, desiredMode);
+  props.setProperty(PROP.PIPELINE_CADENCE_REASON, cadenceReason);
 
   if (desiredMode !== "NORMAL") {
     log_("WARN", "Pipeline degraded cadence active", {
       mode: desiredMode,
+      cadenceReason: cadenceReason,
       cadenceMinutes: desiredMinutes,
       zeroStreak: streak,
       thresholds: { level1: level1Threshold, level2: level2Threshold },
+      remainingCredits: remainingCredits,
+      creditThresholds: { warning: creditWarningThreshold, critical: creditCriticalThreshold },
       matched: matched,
       computed: computed
     });
   } else if (prevMode !== "NORMAL") {
     log_("INFO", "Pipeline cadence recovered to normal", {
       previousMode: prevMode,
+      previousReason: prevReason,
+      cadenceReason: cadenceReason,
       cadenceMinutes: desiredMinutes,
       zeroStreak: streak,
+      remainingCredits: remainingCredits,
       matched: matched,
       computed: computed
     });
@@ -886,9 +933,12 @@ function updatePipelineCadenceState_(cfg, props, matchedCount, computedCount) {
 
   return {
     mode: desiredMode,
+    reason: cadenceReason,
     cadenceMinutes: desiredMinutes,
     zeroStreak: streak,
-    zeroDataRun: zeroDataRun
+    zeroDataRun: zeroDataRun,
+    remainingCredits: remainingCredits,
+    creditPressureLevel: creditPressureLevel
   };
 }
 
@@ -1106,13 +1156,13 @@ function runPipeline(opts) {
     var cadenceState = updatePipelineCadenceState_(cfg, props, mlbRes.matchedCount, modelRes.computed);
 
     var rejectionSummaryText = JSON.stringify(mlbRes.rejectionSummary || {});
-    var summary = "odds=" + oddsRes.games + " matched=" + mlbRes.matchedCount + " computed=" + modelRes.computed + " bets=" + modelRes.betSignalsFound + " cadenceMode=" + cadenceState.mode + " cadenceMin=" + cadenceState.cadenceMinutes + " zeroStreak=" + cadenceState.zeroStreak + " lineupFallbackUsed=" + (modelRes.lineupFallbackUsed ? "Y" : "N") + " lineupFallbackGames=" + (modelRes.lineupFallbackGames || 0) + " weatherApplied=" + (modelRes.weatherAppliedGames || 0) + " bullpenApplied=" + (modelRes.bullpenFeatureAppliedGames || 0) + " experimentalApplied=" + (modelRes.experimentalAppliedGames || 0) + " expandedWindowFallback=" + (mlbRes.expandedWindowFallbackUsed ? "Y" : "N") + " rejects=" + rejectionSummaryText;
+    var summary = "odds=" + oddsRes.games + " matched=" + mlbRes.matchedCount + " computed=" + modelRes.computed + " bets=" + modelRes.betSignalsFound + " cadenceMode=" + cadenceState.mode + " cadenceReason=" + cadenceState.reason + " cadenceMin=" + cadenceState.cadenceMinutes + " zeroStreak=" + cadenceState.zeroStreak + " lineupFallbackUsed=" + (modelRes.lineupFallbackUsed ? "Y" : "N") + " lineupFallbackGames=" + (modelRes.lineupFallbackGames || 0) + " weatherApplied=" + (modelRes.weatherAppliedGames || 0) + " bullpenApplied=" + (modelRes.bullpenFeatureAppliedGames || 0) + " experimentalApplied=" + (modelRes.experimentalAppliedGames || 0) + " expandedWindowFallback=" + (mlbRes.expandedWindowFallbackUsed ? "Y" : "N") + " rejects=" + rejectionSummaryText;
 
     props.setProperty(PROP.LAST_PIPELINE_AT, startedUtc);
     props.setProperty(PROP.LAST_PIPELINE_STATUS, "OK");
     props.setProperty(PROP.LAST_PIPELINE_SUMMARY, summary);
 
-    log_("INFO", "runPipeline completed", { odds: oddsRes.games, matched: mlbRes.matchedCount, computed: modelRes.computed, betSignalsFound: modelRes.betSignalsFound, cadenceMode: cadenceState.mode, cadenceMinutes: cadenceState.cadenceMinutes, zeroStreak: cadenceState.zeroStreak, lineupFallbackMode: modelRes.lineupFallbackMode, lineupFallbackUsed: modelRes.lineupFallbackUsed, lineupFallbackGames: modelRes.lineupFallbackGames, weatherAppliedGames: modelRes.weatherAppliedGames || 0, bullpenFeatureAppliedGames: modelRes.bullpenFeatureAppliedGames || 0, experimentalAppliedGames: modelRes.experimentalAppliedGames || 0, externalFeatureFetchLogs: modelRes.externalFeatureFetchLogs || [], expandedWindowFallbackUsed: !!mlbRes.expandedWindowFallbackUsed, rejectionSummary: mlbRes.rejectionSummary || {} });
+    log_("INFO", "runPipeline completed", { odds: oddsRes.games, matched: mlbRes.matchedCount, computed: modelRes.computed, betSignalsFound: modelRes.betSignalsFound, cadenceMode: cadenceState.mode, cadenceReason: cadenceState.reason, cadenceMinutes: cadenceState.cadenceMinutes, zeroStreak: cadenceState.zeroStreak, lineupFallbackMode: modelRes.lineupFallbackMode, lineupFallbackUsed: modelRes.lineupFallbackUsed, lineupFallbackGames: modelRes.lineupFallbackGames, weatherAppliedGames: modelRes.weatherAppliedGames || 0, bullpenFeatureAppliedGames: modelRes.bullpenFeatureAppliedGames || 0, experimentalAppliedGames: modelRes.experimentalAppliedGames || 0, externalFeatureFetchLogs: modelRes.externalFeatureFetchLogs || [], expandedWindowFallbackUsed: !!mlbRes.expandedWindowFallbackUsed, rejectionSummary: mlbRes.rejectionSummary || {} });
   } catch (e) {
     props.setProperty(PROP.LAST_PIPELINE_AT, startedUtc);
     props.setProperty(PROP.LAST_PIPELINE_STATUS, "ERROR");
