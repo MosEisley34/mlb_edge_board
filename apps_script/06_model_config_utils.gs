@@ -738,6 +738,67 @@ function computeUnits_(unitsCfg, tier, confidence) {
   return Math.round(u * 100) / 100;
 }
 
+
+function getSignalLogOpenSnapshotByOddsId_() {
+  var ss = SpreadsheetApp.getActive();
+  var sh = ss.getSheetByName(SH.ODDS_HISTORY);
+  if (!sh) return {};
+
+  var rows = readSheetAsObjects_(sh);
+  var out = {};
+  for (var i = 0; i < rows.length; i++) {
+    var r = rows[i] || {};
+    var oddsId = String(r.odds_game_id || "");
+    if (!oddsId || out[oddsId]) continue;
+    out[oddsId] = {
+      away_price: toFloat_(r.away_odds_decimal, NaN),
+      home_price: toFloat_(r.home_odds_decimal, NaN),
+      away_implied: toFloat_(r.away_implied, NaN),
+      home_implied: toFloat_(r.home_implied, NaN),
+      commence_time_utc: String(r.commence_time_utc || "")
+    };
+  }
+  return out;
+}
+
+function getPickSideOdds_(snapshot, pickSide) {
+  var side = String(pickSide || "").toUpperCase();
+  if (side !== "AWAY" && side !== "HOME") {
+    return { price: NaN, implied: NaN, reason: "missing_pick_side" };
+  }
+  if (!snapshot) return { price: NaN, implied: NaN, reason: "open_snapshot_missing" };
+
+  var price = side === "AWAY" ? Number(snapshot.away_price) : Number(snapshot.home_price);
+  var implied = side === "AWAY" ? Number(snapshot.away_implied) : Number(snapshot.home_implied);
+  if (!isFinite(price) || !isFinite(implied)) return { price: NaN, implied: NaN, reason: "open_pick_price_missing" };
+
+  return { price: price, implied: implied, reason: "" };
+}
+
+function buildSignalOpenMetrics_(oddsId, pickSide, signalPrice, signalImplied, openByOddsId) {
+  var source = openByOddsId || getSignalLogOpenSnapshotByOddsId_();
+  var entry = getPickSideOdds_(source[String(oddsId || "")], pickSide);
+  if (!isFinite(entry.price) || !isFinite(entry.implied)) {
+    return {
+      open_price_pick: "",
+      open_implied_pick: "",
+      delta_open_to_signal_price: "",
+      delta_open_to_signal_implied: "",
+      open_reason_code: String(entry.reason || "open_pick_price_missing")
+    };
+  }
+
+  var signalP = Number(signalPrice);
+  var signalI = Number(signalImplied);
+  return {
+    open_price_pick: round_(entry.price, 4),
+    open_implied_pick: round_(entry.implied, 6),
+    delta_open_to_signal_price: isFinite(signalP) ? round_(signalP - entry.price, 4) : "",
+    delta_open_to_signal_implied: isFinite(signalI) ? round_(signalI - entry.implied, 6) : "",
+    open_reason_code: ""
+  };
+}
+
 function maybeNotifyDiscord_(cfg, oddsId, dateKey, payload) {
   var maxAgeMin = toFloat_(cfg.NOTIFY_MAX_ODDS_AGE_MIN, 45);
   var cooldownMin = toFloat_(cfg.NOTIFY_COOLDOWN_MIN, 60);
@@ -811,6 +872,7 @@ function maybeNotifyDiscord_(cfg, oddsId, dateKey, payload) {
   }
 
   var signalId = Utilities.getUuid();
+  var openMetrics = buildSignalOpenMetrics_(oddsId, payload.bet.side, price, implied);
 
   var signalLogPayload = {
     signal_id: signalId,
@@ -819,10 +881,20 @@ function maybeNotifyDiscord_(cfg, oddsId, dateKey, payload) {
     mlb_gamePk: String(payload.mlbGamePk || ""),
     pick_side: String(payload.bet.side || ""),
     pick_team: String(pickTeam || ""),
+    open_price_pick: openMetrics.open_price_pick,
+    open_implied_pick: openMetrics.open_implied_pick,
+    delta_open_to_signal_price: openMetrics.delta_open_to_signal_price,
+    delta_open_to_signal_implied: openMetrics.delta_open_to_signal_implied,
+    open_reason_code: openMetrics.open_reason_code,
     price_at_signal: isFinite(price) ? round_(price, 4) : "",
     implied_at_signal: isFinite(implied) ? round_(implied, 6) : "",
     model_prob_at_signal: isFinite(modelP) ? round_(modelP, 6) : "",
     edge_at_signal: isFinite(edge) ? round_(edge, 6) : "",
+    close_price_pick: "",
+    close_implied_pick: "",
+    delta_signal_to_close_price: "",
+    delta_signal_to_close_implied: "",
+    close_reason_code: "close_not_stamped_yet",
     tier: String(payload.bet.tier || ""),
     confidence: isFinite(payload.conf) ? round_(payload.conf, 2) : "",
     units_suggested: isFinite(payload.units) ? round_(payload.units, 2) : "",
@@ -887,6 +959,105 @@ function maybeNotifyDiscord_(cfg, oddsId, dateKey, payload) {
     signalId: signalId
   });
   return false;
+}
+
+
+function getLatestOddsByGameId_() {
+  var ss = SpreadsheetApp.getActive();
+  var sh = ss.getSheetByName(SH.ODDS_HISTORY);
+  if (!sh) return {};
+  var rows = readSheetAsObjects_(sh);
+  var out = {};
+  for (var i = 0; i < rows.length; i++) {
+    var r = rows[i] || {};
+    var oddsId = String(r.odds_game_id || "");
+    if (!oddsId) continue;
+    out[oddsId] = {
+      away_price: toFloat_(r.away_odds_decimal, NaN),
+      home_price: toFloat_(r.home_odds_decimal, NaN),
+      away_implied: toFloat_(r.away_implied, NaN),
+      home_implied: toFloat_(r.home_implied, NaN),
+      commence_time_utc: String(r.commence_time_utc || "")
+    };
+  }
+  return out;
+}
+
+function updateSignalLogCloseMetrics() {
+  var ss = SpreadsheetApp.getActive();
+  var sh = ss.getSheetByName(SH.SIGNAL_LOG);
+  if (!sh || sh.getLastRow() < 2) {
+    log_("INFO", "Signal close updater skipped", { reasonCode: "signal_log_empty" });
+    return { updatedRows: 0, skippedRows: 0, reasonCode: "signal_log_empty" };
+  }
+  ensureSignalLogHeader_(sh);
+
+  var range = sh.getDataRange();
+  var values = range.getValues();
+  var header = values[0].map(function (x) { return String(x || ""); });
+  var idx = {};
+  for (var h = 0; h < header.length; h++) idx[header[h]] = h;
+
+  var required = ["odds_game_id", "pick_side", "price_at_signal", "implied_at_signal", "close_price_pick", "close_implied_pick", "delta_signal_to_close_price", "delta_signal_to_close_implied", "close_reason_code"];
+  for (var r = 0; r < required.length; r++) {
+    if (idx[required[r]] === undefined) {
+      log_("WARN", "Signal close updater skipped", { reasonCode: "signal_log_header_missing_col", col: required[r] });
+      return { updatedRows: 0, skippedRows: 0, reasonCode: "signal_log_header_missing_col" };
+    }
+  }
+
+  var cfg = getConfig_();
+  var preStartMin = Math.max(0, toInt_(cfg.SIGNAL_CLOSE_PRESTART_MIN, 15));
+  var nowMs = Date.now();
+  var latestByOddsId = getLatestOddsByGameId_();
+  var updatedRows = 0;
+  var skippedRows = 0;
+
+  for (var i = 1; i < values.length; i++) {
+    var row = values[i];
+    if (String(row[idx.close_price_pick] || "") !== "" || String(row[idx.close_implied_pick] || "") !== "") continue;
+
+    var oddsId = String(row[idx.odds_game_id] || "");
+    var pickSide = String(row[idx.pick_side] || "");
+    var signalPrice = Number(row[idx.price_at_signal]);
+    var signalImplied = Number(row[idx.implied_at_signal]);
+
+    if (!oddsId) {
+      row[idx.close_reason_code] = "close_odds_game_id_missing";
+      skippedRows++;
+      continue;
+    }
+
+    var latestEntry = latestByOddsId[oddsId] || null;
+    var commenceMs = latestEntry ? Date.parse(String(latestEntry.commence_time_utc || "")) : NaN;
+    if (isFinite(commenceMs) && nowMs < (commenceMs - preStartMin * 60000)) {
+      row[idx.close_reason_code] = "close_not_ready_time_window";
+      skippedRows++;
+      continue;
+    }
+
+    var closeEntry = getPickSideOdds_(latestEntry, pickSide);
+    if (!isFinite(closeEntry.price) || !isFinite(closeEntry.implied)) {
+      row[idx.close_price_pick] = "";
+      row[idx.close_implied_pick] = "";
+      row[idx.delta_signal_to_close_price] = "";
+      row[idx.delta_signal_to_close_implied] = "";
+      row[idx.close_reason_code] = String(closeEntry.reason || "close_pick_price_missing").replace(/^open_/, "close_");
+      skippedRows++;
+      continue;
+    }
+
+    row[idx.close_price_pick] = round_(closeEntry.price, 4);
+    row[idx.close_implied_pick] = round_(closeEntry.implied, 6);
+    row[idx.delta_signal_to_close_price] = isFinite(signalPrice) ? round_(closeEntry.price - signalPrice, 4) : "";
+    row[idx.delta_signal_to_close_implied] = isFinite(signalImplied) ? round_(closeEntry.implied - signalImplied, 6) : "";
+    row[idx.close_reason_code] = "";
+    updatedRows++;
+  }
+
+  range.setValues(values);
+  log_("INFO", "Signal close updater completed", { updatedRows: updatedRows, skippedRows: skippedRows, preStartMin: preStartMin });
+  return { updatedRows: updatedRows, skippedRows: skippedRows, reasonCode: "ok" };
 }
 
 function appendSignalLogRow_(rowObj) {

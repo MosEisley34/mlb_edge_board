@@ -19,6 +19,9 @@ function installTriggers() {
       ScriptApp.newTrigger("refreshProjectionsScheduled").timeBased().everyDays(1).atHour(6).nearMinute(5).create();
       ScriptApp.newTrigger("refreshProjectionsScheduled").timeBased().everyDays(1).atHour(11).nearMinute(5).create();
       ScriptApp.newTrigger("runDailyCalibration").timeBased().everyDays(1).atHour(8).nearMinute(20).create();
+      if (cfg.ENABLE_SIGNAL_CLOSE_UPDATER) {
+        ScriptApp.newTrigger("updateSignalLogCloseMetrics").timeBased().everyMinutes(Math.max(5, toInt_(cfg.SIGNAL_CLOSE_UPDATER_MINUTES, 30))).create();
+      }
 
       if (desiredState.heartbeatMode === "DAILY") {
         ScriptApp.newTrigger("sendDiscordHeartbeat").timeBased().everyDays(1).atHour(desiredState.heartbeatHour).nearMinute(desiredState.heartbeatMinute).create();
@@ -38,6 +41,8 @@ function installTriggers() {
       pipeline: pipeMins + "m",
       projections: "06:05 + 11:05",
       calibration: "08:20 daily",
+      signalCloseUpdaterEnabled: !!cfg.ENABLE_SIGNAL_CLOSE_UPDATER,
+      signalCloseUpdaterMinutes: Math.max(5, toInt_(cfg.SIGNAL_CLOSE_UPDATER_MINUTES, 30)),
       heartbeat_mode: desiredState.heartbeatMode,
       heartbeat_time: (desiredState.heartbeatMode === "DAILY") ? (pad2_(desiredState.heartbeatHour) + ":" + pad2_(desiredState.heartbeatMinute)) : (desiredState.heartbeatMode === "HOURLY" ? "hourly" : "off"),
       reinstallSkipped: triggersAlreadyCorrect,
@@ -58,7 +63,7 @@ function removeTriggers() {
   var removed = 0;
   for (var i = 0; i < all.length; i++) {
     var fn = all[i].getHandlerFunction();
-    if (fn === "runPipeline" || fn === "refreshProjectionsScheduled" || fn === "sendDiscordHeartbeat" || fn === "runDailyCalibration") {
+    if (fn === "runPipeline" || fn === "refreshProjectionsScheduled" || fn === "sendDiscordHeartbeat" || fn === "runDailyCalibration" || fn === "updateSignalLogCloseMetrics") {
       ScriptApp.deleteTrigger(all[i]);
       removed++;
     }
@@ -72,7 +77,8 @@ function describeDesiredTriggerState_(cfg, pipelineMinutes) {
     pipelineMinutes: normalizePipelineTriggerCadenceMinutes_(pipelineMinutes),
     heartbeatMode: String(cfg.HEARTBEAT_MODE || "DAILY").toUpperCase(),
     heartbeatHour: clampInt_(toInt_(cfg.HEARTBEAT_HOUR, 9), 0, 23),
-    heartbeatMinute: clampInt_(toInt_(cfg.HEARTBEAT_MINUTE, 5), 0, 59)
+    heartbeatMinute: clampInt_(toInt_(cfg.HEARTBEAT_MINUTE, 5), 0, 59),
+    signalCloseUpdaterEnabled: !!cfg.ENABLE_SIGNAL_CLOSE_UPDATER
   };
 }
 
@@ -82,7 +88,8 @@ function describeCurrentTriggerState_() {
     runPipeline: 0,
     refreshProjectionsScheduled: 0,
     sendDiscordHeartbeat: 0,
-    runDailyCalibration: 0
+    runDailyCalibration: 0,
+    updateSignalLogCloseMetrics: 0
   };
   for (var i = 0; i < all.length; i++) {
     var fn = String(all[i].getHandlerFunction() || "");
@@ -93,10 +100,12 @@ function describeCurrentTriggerState_() {
 
 function isTriggerInstallStateMatch_(desiredState, currentState) {
   var expectedHeartbeatCount = desiredState.heartbeatMode === "OFF" ? 0 : 1;
+  var expectedCloseUpdaterCount = desiredState.signalCloseUpdaterEnabled ? 1 : 0;
   return currentState.runPipeline === 1 &&
     currentState.refreshProjectionsScheduled === 2 &&
     currentState.runDailyCalibration === 1 &&
-    currentState.sendDiscordHeartbeat === expectedHeartbeatCount;
+    currentState.sendDiscordHeartbeat === expectedHeartbeatCount &&
+    currentState.updateSignalLogCloseMetrics === expectedCloseUpdaterCount;
 }
 function registerDuplicateRunPrevented_(props, reasonCode, detailObj) {
   var next = Math.max(0, toInt_(props.getProperty(PROP.PIPELINE_DUPLICATE_RUN_PREVENTED), 0)) + 1;

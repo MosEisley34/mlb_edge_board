@@ -71,6 +71,9 @@ function ensureSettings_(sh) {
     ["NOTIFY_MIN_ODDS_MOVE", "0.03", "Minimum decimal odds change required to re-notify"],
     ["NOTIFY_MIN_EDGE_MOVE_PCT", "0.75", "Minimum edge change (percentage points) required to re-notify"],
     ["ENABLE_BET_TRACKING", "FALSE", "TRUE/FALSE: keep legacy BET_LOG and BET_EVENTS workflows enabled"],
+    ["ENABLE_SIGNAL_CLOSE_UPDATER", "FALSE", "TRUE/FALSE: enable time-based close/CLV stamp updates for SIGNAL_LOG"],
+    ["SIGNAL_CLOSE_UPDATER_MINUTES", "30", "Cadence in minutes for SIGNAL_LOG close/CLV updater trigger"],
+    ["SIGNAL_CLOSE_PRESTART_MIN", "15", "Allow close stamping starting this many minutes before first pitch"],
 
     ["EXT_FEATURES_ENABLE_WEATHER", "FALSE", "Enable weather external feature ingestion"],
     ["EXT_FEATURES_ENABLE_BULLPEN", "FALSE", "Enable bullpen external feature ingestion"],
@@ -209,6 +212,9 @@ function getConfig_() {
   cfg.NOTIFY_MIN_ODDS_MOVE = toFloat_(cfg.NOTIFY_MIN_ODDS_MOVE, 0.03);
   cfg.NOTIFY_MIN_EDGE_MOVE_PCT = toFloat_(cfg.NOTIFY_MIN_EDGE_MOVE_PCT, 0.75);
   cfg.ENABLE_BET_TRACKING = String(cfg.ENABLE_BET_TRACKING || "FALSE").toUpperCase() === "TRUE";
+  cfg.ENABLE_SIGNAL_CLOSE_UPDATER = String(cfg.ENABLE_SIGNAL_CLOSE_UPDATER || "FALSE").toUpperCase() === "TRUE";
+  cfg.SIGNAL_CLOSE_UPDATER_MINUTES = Math.max(5, toInt_(cfg.SIGNAL_CLOSE_UPDATER_MINUTES, 30));
+  cfg.SIGNAL_CLOSE_PRESTART_MIN = Math.max(0, toInt_(cfg.SIGNAL_CLOSE_PRESTART_MIN, 15));
   cfg.CALIBRATION_WINDOW_DAYS = Math.max(7, toInt_(cfg.CALIBRATION_WINDOW_DAYS, 30));
   cfg.CALIBRATION_EDGE_BUCKETS = parseNumberList_(cfg.CALIBRATION_EDGE_BUCKETS, [0, 0.02, 0.04, 0.06, 0.10]);
 
