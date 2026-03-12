@@ -53,7 +53,7 @@ function refreshModelAndEdge_core_(cfg, mlbRes) {
     matched = (fallbackMatchRes.matched || []);
   }
 
-  var externalFeatureCtx = loadExternalFeatureContext_(cfg, matched);
+  var externalFeatureCtx = loadExternalFeatureContext_(cfg, matched, oddsById);
 
   var todayKey = localDateKey_();
   var exposure = getExposureState_(shNotify, todayKey);

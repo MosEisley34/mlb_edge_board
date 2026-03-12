@@ -1,6 +1,6 @@
 /* ===================== EXTERNAL FEATURE INGESTION ===================== */
 
-function loadExternalFeatureContext_(cfg, matched) {
+function loadExternalFeatureContext_(cfg, matched, oddsById) {
   var context = {
     enabled: {
       weather: !!cfg.EXT_FEATURES_ENABLE_WEATHER,
@@ -20,7 +20,7 @@ function loadExternalFeatureContext_(cfg, matched) {
 
   if (!matched || !matched.length) return context;
 
-  var gameCtx = buildExternalFeatureGameContext_(matched);
+  var gameCtx = buildExternalFeatureGameContext_(matched, oddsById);
   var weatherRes = fetchExternalFeatureSource_(cfg, "weather", gameCtx);
   var bullpenRes = fetchExternalFeatureSource_(cfg, "bullpen", gameCtx);
   var marketRes = fetchExternalFeatureSource_(cfg, "market", gameCtx);
@@ -48,17 +48,25 @@ function loadExternalFeatureContext_(cfg, matched) {
   return context;
 }
 
-function buildExternalFeatureGameContext_(matched) {
+function buildExternalFeatureGameContext_(matched, oddsById) {
   var out = [];
+  var openingByGameId = getOpeningOddsByGameId_();
   for (var i = 0; i < matched.length; i++) {
     var g = matched[i] || {};
+    var oddsGameId = String(g.odds_game_id || "").trim();
+    var current = (oddsById && oddsGameId) ? (oddsById[oddsGameId] || {}) : {};
+    var opening = openingByGameId[oddsGameId] || {};
     out.push({
-      odds_game_id: String(g.odds_game_id || "").trim(),
+      odds_game_id: oddsGameId,
       mlb_gamePk: String(g.mlb_gamePk || "").trim(),
-      away_team: String(g.away_team || ""),
-      home_team: String(g.home_team || ""),
+      away_team: String(g.away_team || current.away_team || opening.away_team || ""),
+      home_team: String(g.home_team || current.home_team || opening.home_team || ""),
       gameDate_local: String(g.gameDate_local || localDateKey_()),
-      commence_time_local: String(g.commence_time_local || "")
+      commence_time_local: String(g.commence_time_local || ""),
+      current_away_implied: toFloat_(current.away_implied, NaN),
+      current_home_implied: toFloat_(current.home_implied, NaN),
+      opening_away_implied: toFloat_(opening.away_implied, NaN),
+      opening_home_implied: toFloat_(opening.home_implied, NaN)
     });
   }
   return out;
@@ -194,8 +202,19 @@ function fetchExternalFeatureRowsBySource_(sourceCfg, games) {
       item.runPrevDeltaAway = -0.06 * item.awayBullpenFatigue;
       item.runPrevDeltaHome = -0.06 * item.homeBullpenFatigue;
     } else if (sourceCfg.source === "market") {
-      item.marketPressure = syntheticMarketPressure_(g.mlb_gamePk);
-      item.marketDelta = (item.marketPressure - 0.5) * 0.04;
+      var openAway = Number(g.opening_away_implied);
+      var openHome = Number(g.opening_home_implied);
+      var curAway = Number(g.current_away_implied);
+      var curHome = Number(g.current_home_implied);
+      if (isFinite(openAway) && isFinite(openHome) && isFinite(curAway) && isFinite(curHome)) {
+        item.marketPressure = clampMarketPressure_((curAway - openAway) - (curHome - openHome));
+        item.marketDelta = (item.marketPressure - 0.5) * 0.04;
+        item.marketMoveAway = curAway - openAway;
+        item.marketMoveHome = curHome - openHome;
+      } else {
+        item.marketPressure = syntheticMarketPressure_(g.mlb_gamePk);
+        item.marketDelta = (item.marketPressure - 0.5) * 0.04;
+      }
     } else if (sourceCfg.source === "statcast") {
       item.contactQualityDelta = syntheticContactDelta_(g.mlb_gamePk);
       item.statcastDelta = item.contactQualityDelta * 0.03;
@@ -340,6 +359,12 @@ function classifyExternalFeatureError_(e) {
   if (msg.indexOf("parse") >= 0) return "parse";
   if (msg.indexOf("429") >= 0 || msg.indexOf("rate") >= 0) return "rate_limit";
   return "runtime";
+}
+
+function clampMarketPressure_(x) {
+  var n = Number(x);
+  if (!isFinite(n)) return 0.5;
+  return Math.max(0, Math.min(1, 0.5 + (n * 4)));
 }
 
 function syntheticWeatherSeverity_(seed) { return seededRatio_(seed + "|w"); }
