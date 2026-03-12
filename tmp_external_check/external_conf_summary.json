@@ -1,0 +1,25 @@
+{
+  "generated_at_utc": "2026-03-12T22:05:57.374331+00:00",
+  "source": "mlb_statsapi",
+  "lookback_days": 4,
+  "start_date": "",
+  "end_date": "",
+  "schedule_url": "",
+  "bullpen_total_rows": 0,
+  "bullpen_team_nonnull_rows": 0,
+  "bullpen_team_nonnull_pct": 0.0,
+  "bullpen_high_conf_rows": 0,
+  "bullpen_high_conf_pct": 0.0,
+  "bullpen_boxscore_fetch_errors": 0,
+  "thresholds": {
+    "bullpen_team_nonnull_pct_gte_99": false,
+    "bullpen_high_conf_pct_gte_99": false,
+    "bullpen_boxscore_fetch_errors_eq_0": true
+  },
+  "low_conf_or_error_rows": [],
+  "spot_check_random_rows": [],
+  "schedule_games": 0,
+  "schedule_fetch_error": "schedule fetch failed: <urlopen error Tunnel connection failed: 403 Forbidden>",
+  "initial_failed_boxscore_games": [],
+  "retries_used": 0
+}
