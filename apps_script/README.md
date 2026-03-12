@@ -90,6 +90,20 @@ Switch back to `ODDS_USAGE_PROFILE=NORMAL` when credits are healthy.
   - `stages.signal.bet_signals_found`
 - `error_message` (error runs only)
 
+### Canonical `reason_code` enums (machine-first)
+Non-happy path logs/events now use a canonical `reason_code` and optional `reason_detail`.
+
+| reason_code | Meaning | Typical action |
+| --- | --- | --- |
+| `odds_skip` | Odds stage intentionally skipped (window, no-games behavior, guardrails) | Verify schedule window and `ODDS_*` settings; no immediate fix needed unless unexpected. |
+| `schedule_fallback` | Schedule/lookup fallback path engaged | Review schedule freshness and matching tolerances if fallback frequency increases. |
+| `model_skip` | Model/projection stage skipped/degraded | Check projection feeds, model inputs, and upstream availability. |
+| `notify_skip` | Discord/notification delivery skipped or suppressed | Validate delivery credentials/mode and notify throttles. |
+| `cadence_change` | Pipeline cadence adjusted from baseline | Confirm zero-data/credit thresholds and expected cadence policy. |
+| `blocker_state` | Blocking condition active (lock, debounce, low-credit block, hard errors) | Inspect blocker details and clear root cause before forcing reruns. |
+
+`reason_detail` preserves legacy granular values (for example `lock_busy`, `credits_snapshot_fresh_blocked`) for troubleshooting while automation keys on `reason_code`.
+
 ### Reason code buckets
 - `reason_codes.skips`: skip reasons (for example `outside_active_window`, `debounce_active`, `odds_outside_computed_window`).
 - `reason_codes.blockers`: blocking/degraded reasons (for example `credits_snapshot_fresh_blocked`, `schedule_window_fetch_error`, `pipeline_exception`).

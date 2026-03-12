@@ -312,12 +312,50 @@ function minutesFromSetting_(v) {
 
 /* ===================== LOGGING + SHEET UTILS ===================== */
 
+function canonicalReasonCode_(providedCode, message, level) {
+  var code = String(providedCode || "").trim();
+  var known = {};
+  known[REASON_CODE.ODDS_SKIP] = true;
+  known[REASON_CODE.SCHEDULE_FALLBACK] = true;
+  known[REASON_CODE.MODEL_SKIP] = true;
+  known[REASON_CODE.NOTIFY_SKIP] = true;
+  known[REASON_CODE.CADENCE_CHANGE] = true;
+  known[REASON_CODE.BLOCKER_STATE] = true;
+  if (known[code]) return code;
+
+  var msg = String(message || "").toLowerCase();
+  var lvl = String(level || "").toUpperCase();
+  var token = (code || msg).toLowerCase();
+
+  if (token.indexOf("cadence") >= 0) return REASON_CODE.CADENCE_CHANGE;
+  if (token.indexOf("fallback") >= 0 || token.indexOf("schedule") >= 0) return REASON_CODE.SCHEDULE_FALLBACK;
+  if (token.indexOf("notify") >= 0 || token.indexOf("delivery") >= 0 || token.indexOf("discord") >= 0) return REASON_CODE.NOTIFY_SKIP;
+  if (token.indexOf("model") >= 0 || token.indexOf("projection") >= 0) return REASON_CODE.MODEL_SKIP;
+  if (token.indexOf("odds") >= 0) return REASON_CODE.ODDS_SKIP;
+  if (token.indexOf("block") >= 0 || token.indexOf("lock") >= 0 || token.indexOf("debounce") >= 0) return REASON_CODE.BLOCKER_STATE;
+  if (lvl === "WARN" || lvl === "ERROR") return REASON_CODE.BLOCKER_STATE;
+  return "";
+}
+
 function log_(level, message, detailObj) {
   var ss = SpreadsheetApp.getActive();
   var sh = ss.getSheetByName(SH.LOG) || getOrCreateSheet_(ss, SH.LOG);
   if (sh.getLastRow() === 0) ensureLogHeader_(sh);
 
-  var detail = detailObj ? JSON.stringify(detailObj) : "";
+  var detailData = detailObj || {};
+  var nonHappy = /skipp|fail|fallback|block|degrad|error/i.test(String(message || "")) || String(level || "").toUpperCase() === "WARN" || String(level || "").toUpperCase() === "ERROR";
+  if (nonHappy) {
+    var providedCode = detailData.reason_code || detailData.reasonCode || detailData.reason;
+    var canonicalCode = canonicalReasonCode_(providedCode, message, level);
+    if (canonicalCode) detailData.reason_code = canonicalCode;
+
+    var reasonDetail = detailData.reason_detail || detailData.reasonDetail || "";
+    if (!reasonDetail && providedCode && String(providedCode) !== String(canonicalCode || "")) {
+      detailData.reason_detail = String(providedCode);
+    }
+  }
+
+  var detail = (detailObj || nonHappy) ? JSON.stringify(detailData) : "";
   if (detail.length > 1800) detail = detail.slice(0, 1800) + "…(trimmed)";
   sh.appendRow([isoLocalWithOffset_(new Date()), level, message, detail]);
 }
