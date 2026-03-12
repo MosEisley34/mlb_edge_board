@@ -102,27 +102,20 @@ function persistCalibrationSnapshots_(cfg, edgeRows, schedByPk, externalFeatureC
 
 function applyResultToSnapshot_(snapshotObj) {
   var ss = SpreadsheetApp.getActive();
-  var cfg = getConfig_();
-  if (!cfg.ENABLE_BET_TRACKING) return;
-  var shBet = ss.getSheetByName(BET_TRACKING_SHEETS.BET_LOG);
-  if (!shBet || shBet.getLastRow() < 2) return;
+  var shSignals = ss.getSheetByName(SH.SIGNAL_LOG);
+  if (!shSignals || shSignals.getLastRow() < 2) return;
 
-  var rows = readSheetAsObjects_(shBet);
+  var rows = readSheetAsObjects_(shSignals);
   var best = null;
   for (var i = 0; i < rows.length; i++) {
-    var b = rows[i] || {};
-    if (String(b.odds_game_id || "") !== String(snapshotObj.odds_game_id || "")) continue;
-    if (String(b.pick_side || "").toUpperCase() !== String(snapshotObj.bet_side || "").toUpperCase()) continue;
-    best = b;
+    var sig = rows[i] || {};
+    if (String(sig.odds_game_id || "") !== String(snapshotObj.odds_game_id || "")) continue;
+    if (String(sig.pick_side || "").toUpperCase() !== String(snapshotObj.bet_side || "").toUpperCase()) continue;
+    best = sig;
   }
   if (!best) return;
 
-  var rs = String(best.result || best.status || "").toUpperCase();
-  if (rs === "WIN" || rs === "LOSS" || rs === "PUSH" || rs === "VOID") {
-    snapshotObj.result = rs;
-    snapshotObj.pnl_units = toFloat_(best.pnl_units, "");
-    snapshotObj.resolved_at_local = String(best.result_at_local || "");
-  }
+  // SIGNAL_LOG is immutable and does not track bet settlement; snapshot result fields remain empty.
 }
 
 function runDailyCalibration() {
