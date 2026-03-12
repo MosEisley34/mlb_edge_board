@@ -56,6 +56,44 @@ Recommended low-credit settings:
 
 Switch back to `ODDS_USAGE_PROFILE=NORMAL` when credits are healthy.
 
+
+## `runPipeline` JSON summary artifact
+`runPipeline` now emits one structured JSON log event at the end of every run (success, skip, or error) with message `runPipeline summary`. This is the **primary handoff artifact** for downstream automation. Existing stage logs remain for debugging.
+
+### Summary schema versioning
+- `summary_schema_version` is included in every summary payload.
+- Current value: `1.0.0`.
+- Consumers should gate parsing logic on this field for backward compatibility.
+
+### Mandatory fields (always present)
+- `summary_schema_version`
+- `run_id`
+- `started_at`
+- `duration_ms`
+- `outcome`
+- `mode.trigger_source`
+- `stages.odds.outcome`
+- `stages.schedule.outcome`
+- `stages.model.outcome`
+- `stages.signal.outcome`
+- `reason_codes.skips` (array; can be empty)
+- `reason_codes.blockers` (array; can be empty)
+
+### Optional fields (present when available/applicable)
+- `mode.app_mode`, `mode.active_start`, `mode.active_end`
+- `cadence` (`mode`, `reason`, `cadence_minutes`, `zero_streak`, `zero_data_run`)
+- `credit_state` (`remaining_credits`, `credit_pressure_level`, and/or blocker snapshot metadata)
+- Stage metrics such as:
+  - `stages.odds.games`
+  - `stages.schedule.matched_count`, `stages.schedule.expanded_window_fallback_used`, `stages.schedule.rejection_summary`
+  - `stages.model.computed`, `stages.model.lineup_fallback_used`, `stages.model.lineup_fallback_games`
+  - `stages.signal.bet_signals_found`
+- `error_message` (error runs only)
+
+### Reason code buckets
+- `reason_codes.skips`: skip reasons (for example `outside_active_window`, `debounce_active`, `odds_outside_computed_window`).
+- `reason_codes.blockers`: blocking/degraded reasons (for example `credits_snapshot_fresh_blocked`, `schedule_window_fetch_error`, `pipeline_exception`).
+
 ## Legacy bet tracking deprecation
 - Legacy bet tracking flows are retired by default.
 - `doGet` / `doPost` action routes in `08_bet_actions.gs` return informational pages unless bet tracking is explicitly re-enabled.
