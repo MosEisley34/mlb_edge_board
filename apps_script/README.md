@@ -62,7 +62,7 @@ Switch back to `ODDS_USAGE_PROFILE=NORMAL` when credits are healthy.
 
 ### Summary schema versioning
 - `summary_schema_version` is included in every summary payload.
-- Current value: `1.0.0`.
+- Current value: `1.1.0`.
 - Consumers should gate parsing logic on this field for backward compatibility.
 
 ### Mandatory fields (always present)
@@ -112,6 +112,16 @@ Non-happy path logs/events now use a canonical `reason_code` and optional `reaso
 - `reason_codes.skips`: skip reasons (for example `outside_active_window`, `debounce_active`, `odds_outside_computed_window`).
 - `reason_codes.blockers`: blocking/degraded reasons (for example `credits_snapshot_fresh_blocked`, `schedule_window_fetch_error`, `pipeline_exception`).
 - `reason_codes.warnings`: non-blocking performance warnings (for example `stage_model_duration_warn`, `stage_odds_fetch_drift_spike`).
+
+
+## `RUN_SUMMARY_LOG` (default review source)
+`setup()` now creates `RUN_SUMMARY_LOG` as the canonical per-run index, with one row per `runPipeline` execution (ok/skip/error).
+
+- Contains only canonical run-summary fields (compact, machine-reviewable).
+- Includes `run_id` plus `log_row_start` / `log_row_end` pointers back to verbose `LOG` rows for deep debugging.
+- Retention policy keeps the most recent `2,000` runs by default (`RUN_SUMMARY_RETENTION_MAX_ROWS`).
+- Optional archive support is built into retention enforcement (`RUN_SUMMARY_ARCHIVE`) when archival mode is enabled in code.
+- Use `RUN_SUMMARY_LOG` as the first source when sharing logs for reviews; drill into `LOG` only as needed via row-range pointers.
 
 ## Legacy bet tracking deprecation
 - Legacy bet tracking flows are retired by default.

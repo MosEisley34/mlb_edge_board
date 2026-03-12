@@ -1149,7 +1149,10 @@ function runPipeline(opts) {
     summary_schema_version: "1.1.0",
     run_id: runId,
     started_at: new Date().toISOString(),
+    finished_at: "",
     duration_ms: 0,
+    log_row_start: 0,
+    log_row_end: 0,
     outcome: "unknown",
     mode: {
       trigger_source: String(options.source || "scheduled")
@@ -1169,6 +1172,7 @@ function runPipeline(opts) {
       warnings: []
     }
   };
+  runSummary.log_row_start = Math.max(getLogDataRowStart_(), getCurrentLogRowCount_() + 2);
 
   function addReasonCode_(bucket, code) {
     if (!code) return;
@@ -1259,7 +1263,8 @@ function runPipeline(opts) {
 
   function emitRunSummary_(status) {
     runSummary.outcome = String(status || runSummary.outcome || "unknown");
-    runSummary.duration_ms = Math.max(0, Date.now() - Date.parse(runSummary.started_at));
+    runSummary.finished_at = new Date().toISOString();
+    runSummary.duration_ms = Math.max(0, Date.parse(runSummary.finished_at) - Date.parse(runSummary.started_at));
     if (runSummary.outcome !== "ok") {
       var blockerDetail = (runSummary.reason_codes && runSummary.reason_codes.blockers || []).join(",");
       var skipDetail = (runSummary.reason_codes && runSummary.reason_codes.skips || []).join(",");
@@ -1267,6 +1272,8 @@ function runPipeline(opts) {
       runSummary.reason_detail = blockerDetail || skipDetail || runSummary.outcome;
     }
     log_(runSummary.outcome === "ok" ? "INFO" : "WARN", "runPipeline summary", runSummary);
+    runSummary.log_row_end = Math.max(getLogDataRowStart_(), getCurrentLogRowCount_() + 1);
+    appendRunSummaryLog_(runSummary);
   }
 
   if (!options.skipLock) {

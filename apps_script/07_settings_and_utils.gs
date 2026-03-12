@@ -372,6 +372,85 @@ function log_(level, message, detailObj) {
   sh.appendRow([isoLocalWithOffset_(new Date()), level, message, detail]);
 }
 
+function getLogDataRowStart_() { return 2; }
+
+function getCurrentLogRowCount_() {
+  var ss = SpreadsheetApp.getActive();
+  var sh = ss.getSheetByName(SH.LOG) || getOrCreateSheet_(ss, SH.LOG);
+  if (sh.getLastRow() === 0) ensureLogHeader_(sh);
+  return Math.max(0, sh.getLastRow() - 1);
+}
+
+function enforceRunSummaryRetention_(ss, archiveEnabled) {
+  var summarySheet = ss.getSheetByName(SH.RUN_SUMMARY_LOG) || getOrCreateSheet_(ss, SH.RUN_SUMMARY_LOG);
+  if (summarySheet.getLastRow() === 0) ensureRunSummaryLogHeader_(summarySheet);
+
+  var maxRows = Math.max(1, toInt_(RUN_SUMMARY_RETENTION_MAX_ROWS, 2000));
+  var dataRows = Math.max(0, summarySheet.getLastRow() - 1);
+  var overflow = dataRows - maxRows;
+  if (overflow <= 0) return;
+
+  var rowsToArchive = summarySheet.getRange(2, 1, overflow, summarySheet.getLastColumn()).getValues();
+  if (archiveEnabled) {
+    var archiveSheet = ss.getSheetByName(SH.RUN_SUMMARY_ARCHIVE) || getOrCreateSheet_(ss, SH.RUN_SUMMARY_ARCHIVE);
+    if (archiveSheet.getLastRow() === 0) ensureRunSummaryLogHeader_(archiveSheet);
+    var archiveStart = archiveSheet.getLastRow() + 1;
+    archiveSheet.getRange(archiveStart, 1, rowsToArchive.length, rowsToArchive[0].length).setValues(rowsToArchive);
+  }
+
+  summarySheet.deleteRows(2, overflow);
+}
+
+function appendRunSummaryLog_(runSummary) {
+  var summary = runSummary || {};
+  var ss = SpreadsheetApp.getActive();
+  var sh = ss.getSheetByName(SH.RUN_SUMMARY_LOG) || getOrCreateSheet_(ss, SH.RUN_SUMMARY_LOG);
+  if (sh.getLastRow() === 0) ensureRunSummaryLogHeader_(sh);
+
+  var stage = summary.stages || {};
+  var odds = stage.odds || {};
+  var schedule = stage.schedule || {};
+  var model = stage.model || {};
+  var signal = stage.signal || {};
+  var cadence = summary.cadence || {};
+  var creditState = summary.credit_state || {};
+  var reasonCodes = summary.reason_codes || {};
+  var warnings = reasonCodes.warnings || [];
+
+  sh.appendRow([
+    String(summary.run_id || ""),
+    String(summary.started_at || ""),
+    String(summary.finished_at || ""),
+    String(summary.outcome || ""),
+    String((summary.mode && summary.mode.trigger_source) || ""),
+    String((summary.mode && summary.mode.app_mode) || ""),
+    String((summary.mode && summary.mode.active_start) || "") + "-" + String((summary.mode && summary.mode.active_end) || ""),
+    toInt_(summary.duration_ms, 0),
+    String(odds.outcome || ""),
+    toInt_(odds.games, 0),
+    String(schedule.outcome || ""),
+    toInt_(schedule.matched_count, 0),
+    String(model.outcome || ""),
+    toInt_(model.computed, 0),
+    String(signal.outcome || ""),
+    toInt_(signal.bet_signals_found, 0),
+    String(cadence.mode || ""),
+    String(cadence.reason || ""),
+    toInt_(cadence.cadence_minutes, 0),
+    toInt_(cadence.zero_streak, 0),
+    String(creditState.credit_pressure_level || ""),
+    toInt_(creditState.remaining_credits, 0),
+    String(summary.reason_code || ""),
+    String(summary.reason_detail || ""),
+    warnings.length,
+    toInt_(summary.log_row_start, 0),
+    toInt_(summary.log_row_end, 0),
+    String(summary.summary_schema_version || "")
+  ]);
+
+  enforceRunSummaryRetention_(ss, false);
+}
+
 function getOrCreateSheet_(ss, name) { var sh = ss.getSheetByName(name); if (!sh) sh = ss.insertSheet(name); return sh; }
 
 function setHeader_(sh, headerArr) {
