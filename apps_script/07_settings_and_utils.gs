@@ -242,7 +242,8 @@ function getConfig_() {
   cfg.NOTIFY_MIN_EDGE_MOVE_PCT = toFloat_(cfg.NOTIFY_MIN_EDGE_MOVE_PCT, 0.75);
   cfg.ENABLE_BET_TRACKING = String(cfg.ENABLE_BET_TRACKING || "FALSE").toUpperCase() === "TRUE";
   cfg.ENABLE_SIGNAL_CLOSE_UPDATER = String(cfg.ENABLE_SIGNAL_CLOSE_UPDATER || "FALSE").toUpperCase() === "TRUE";
-  cfg.SIGNAL_CLOSE_UPDATER_MINUTES = Math.max(5, toInt_(cfg.SIGNAL_CLOSE_UPDATER_MINUTES, 30));
+  cfg.SIGNAL_CLOSE_UPDATER_MINUTES_REQUESTED = parseCadenceMinutesSetting_(cfg.SIGNAL_CLOSE_UPDATER_MINUTES, 30, "SIGNAL_CLOSE_UPDATER_MINUTES");
+  cfg.SIGNAL_CLOSE_UPDATER_MINUTES = normalizePipelineTriggerCadenceMinutes_(cfg.SIGNAL_CLOSE_UPDATER_MINUTES_REQUESTED);
   cfg.SIGNAL_CLOSE_PRESTART_MIN = Math.max(0, toInt_(cfg.SIGNAL_CLOSE_PRESTART_MIN, 15));
   cfg.CALIBRATION_WINDOW_DAYS = Math.max(7, toInt_(cfg.CALIBRATION_WINDOW_DAYS, 30));
   cfg.CALIBRATION_EDGE_BUCKETS = parseNumberList_(cfg.CALIBRATION_EDGE_BUCKETS, [0, 0.02, 0.04, 0.06, 0.10]);
@@ -408,6 +409,36 @@ function mapToString_(arr) { var out = []; for (var i = 0; i < arr.length; i++) 
 function indexOf_(arr, val) { for (var i = 0; i < arr.length; i++) if (String(arr[i]) === String(val)) return i; return -1; }
 function toInt_(v, def) { var n = parseInt(v, 10); return isFinite(n) ? n : def; }
 function toFloat_(v, def) { var n = parseFloat(v); return isFinite(n) ? n : def; }
+function parseCadenceMinutesSetting_(value, fallback, keyName) {
+  var raw = String(value == null ? "" : value).trim();
+  var parsed = toInt_(raw, fallback);
+  var valid = [1, 5, 10, 15, 30];
+  var sourceKey = String(keyName || "cadence_minutes");
+
+  if (!raw) return parsed;
+
+  if (!/^[-+]?\d+$/.test(raw)) {
+    log_("WARN", "Cadence setting is not an integer; using fallback", {
+      key: sourceKey,
+      rawValue: raw,
+      fallbackMinutes: fallback
+    });
+    return fallback;
+  }
+
+  if (indexOf_(valid, parsed) < 0) {
+    var applied = normalizePipelineTriggerCadenceMinutes_(parsed);
+    log_("WARN", "Cadence setting is outside allowed trigger minutes; normalization will apply", {
+      key: sourceKey,
+      requestedMinutes: parsed,
+      appliedMinutes: applied,
+      allowedMinutes: valid.join(",")
+    });
+  }
+
+  return parsed;
+}
+
 function parseNumberList_(v, fallbackArr) {
   var raw = String(v || "").trim();
   var out = [];

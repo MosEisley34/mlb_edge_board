@@ -29,7 +29,7 @@ function installTriggers() {
         ScriptApp.newTrigger("refreshProjectionsScheduled").timeBased().everyDays(1).atHour(11).nearMinute(5).create();
         ScriptApp.newTrigger("runDailyCalibration").timeBased().everyDays(1).atHour(8).nearMinute(20).create();
         if (cfg.ENABLE_SIGNAL_CLOSE_UPDATER) {
-          createSignalCloseUpdaterTrigger_(Math.max(5, toInt_(cfg.SIGNAL_CLOSE_UPDATER_MINUTES, 30)));
+          createSignalCloseUpdaterTrigger_(cfg.SIGNAL_CLOSE_UPDATER_MINUTES);
         } else {
           clearSignalCloseUpdaterTriggerMetadata_();
         }
@@ -55,7 +55,8 @@ function installTriggers() {
       projections: "06:05 + 11:05",
       calibration: "08:20 daily",
       signalCloseUpdaterEnabled: !!cfg.ENABLE_SIGNAL_CLOSE_UPDATER,
-      signalCloseUpdaterMinutes: Math.max(5, toInt_(cfg.SIGNAL_CLOSE_UPDATER_MINUTES, 30)),
+      signalCloseUpdaterRequestedMinutes: toInt_(cfg.SIGNAL_CLOSE_UPDATER_MINUTES_REQUESTED, 30),
+      signalCloseUpdaterAppliedMinutes: desiredState.signalCloseUpdaterMinutes,
       signalCloseUpdaterPrevMinutes: currentState.signalCloseUpdaterCadenceMinutes,
       signalCloseUpdaterNextMinutes: desiredState.signalCloseUpdaterMinutes,
       signalCloseUpdaterAction: closeUpdaterAction,
@@ -91,13 +92,14 @@ function removeTriggers() {
 
 
 function describeDesiredTriggerState_(cfg, pipelineMinutes) {
+  var signalCloseUpdaterRequestedMinutes = toInt_(cfg.SIGNAL_CLOSE_UPDATER_MINUTES_REQUESTED, cfg.SIGNAL_CLOSE_UPDATER_MINUTES);
   return {
     pipelineMinutes: normalizePipelineTriggerCadenceMinutes_(pipelineMinutes),
     heartbeatMode: String(cfg.HEARTBEAT_MODE || "DAILY").toUpperCase(),
     heartbeatHour: clampInt_(toInt_(cfg.HEARTBEAT_HOUR, 9), 0, 23),
     heartbeatMinute: clampInt_(toInt_(cfg.HEARTBEAT_MINUTE, 5), 0, 59),
     signalCloseUpdaterEnabled: !!cfg.ENABLE_SIGNAL_CLOSE_UPDATER,
-    signalCloseUpdaterMinutes: Math.max(5, toInt_(cfg.SIGNAL_CLOSE_UPDATER_MINUTES, 30))
+    signalCloseUpdaterMinutes: normalizePipelineTriggerCadenceMinutes_(signalCloseUpdaterRequestedMinutes)
   };
 }
 
@@ -118,7 +120,7 @@ function describeCurrentTriggerState_() {
   }
   var props = PropertiesService.getScriptProperties();
   var storedCloseUpdaterMinutesRaw = toInt_(props.getProperty(PROP.SIGNAL_CLOSE_UPDATER_CADENCE_MINUTES), 0);
-  var storedCloseUpdaterMinutes = storedCloseUpdaterMinutesRaw > 0 ? Math.max(5, storedCloseUpdaterMinutesRaw) : 0;
+  var storedCloseUpdaterMinutes = storedCloseUpdaterMinutesRaw > 0 ? normalizePipelineTriggerCadenceMinutes_(storedCloseUpdaterMinutesRaw) : 0;
   var storedCloseUpdaterSignature = String(props.getProperty(PROP.SIGNAL_CLOSE_UPDATER_TRIGGER_SIGNATURE) || "");
   counts.signalCloseUpdaterCadenceMinutes = storedCloseUpdaterMinutes;
   counts.signalCloseUpdaterSignature = storedCloseUpdaterSignature;
@@ -143,7 +145,7 @@ function isTriggerInstallStateMatch_(desiredState, currentState) {
 }
 
 function createSignalCloseUpdaterTrigger_(minutes) {
-  var cadenceMinutes = Math.max(5, toInt_(minutes, 30));
+  var cadenceMinutes = normalizePipelineTriggerCadenceMinutes_(minutes);
   ScriptApp.newTrigger("updateSignalLogCloseMetrics").timeBased().everyMinutes(cadenceMinutes).create();
   var props = PropertiesService.getScriptProperties();
   props.setProperty(PROP.SIGNAL_CLOSE_UPDATER_CADENCE_MINUTES, String(cadenceMinutes));
