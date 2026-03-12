@@ -766,23 +766,188 @@ function compareOddsSnapshots_(a, b) {
   return Number(a.row_index || 0) - Number(b.row_index || 0);
 }
 
+var ODDS_HISTORY_INDEX_PROP_MAX_BYTES_ = 8500;
+var ODDS_HISTORY_INDEX_PROP_SHARD_BYTES_ = 8000;
+var ODDS_HISTORY_INDEX_PROP_MAX_SHARDS_ = 55;
+var ODDS_HISTORY_INDEX_CACHE_TTL_SEC_ = 21600;
+
+function cleanupOddsHistoryIndexShards_(props, keepShardCount) {
+  var start = Math.max(0, toInt_(keepShardCount, 0));
+  for (var i = start; i < ODDS_HISTORY_INDEX_PROP_MAX_SHARDS_; i++) {
+    props.deleteProperty(PROP.ODDS_HISTORY_INDEX_SHARD_PREFIX + i);
+  }
+}
+
 function getOddsHistoryIndexCache_() {
+  var cache = CacheService.getScriptCache();
   var props = PropertiesService.getScriptProperties();
-  var raw = props.getProperty(PROP.ODDS_HISTORY_INDEX) || "";
-  if (!raw) return { ok: false, reason: "missing", index: null };
+  var cacheKey = PROP.ODDS_HISTORY_INDEX_CACHE;
+
   try {
+    var cacheRaw = cache.get(cacheKey) || "";
+    if (cacheRaw) {
+      var cacheParsed = JSON.parse(cacheRaw);
+      if (cacheParsed && typeof cacheParsed === "object" && cacheParsed.by_id) {
+        return {
+          ok: true,
+          reason: "hit_cache_service",
+          index: cacheParsed,
+          cacheBackend: "cache_service",
+          cacheSizeBytes: cacheRaw.length
+        };
+      }
+    }
+  } catch (cacheErr) {
+    log_("WARN", "Odds history index cache read failed", {
+      reasonCode: "cache_service_read_failed",
+      cacheBackend: "cache_service",
+      error: String(cacheErr)
+    });
+  }
+
+  var metaRaw = props.getProperty(PROP.ODDS_HISTORY_INDEX_META) || "";
+  if (!metaRaw) {
+    var legacyRaw = props.getProperty(PROP.ODDS_HISTORY_INDEX) || "";
+    if (!legacyRaw) return { ok: false, reason: "missing", index: null, cacheBackend: "none", cacheSizeBytes: 0 };
+    try {
+      var legacyParsed = JSON.parse(legacyRaw);
+      if (!legacyParsed || typeof legacyParsed !== "object" || !legacyParsed.by_id) return { ok: false, reason: "invalid_shape", index: null, cacheBackend: "legacy_script_property", cacheSizeBytes: legacyRaw.length };
+      return { ok: true, reason: "hit_legacy_script_property", index: legacyParsed, cacheBackend: "legacy_script_property", cacheSizeBytes: legacyRaw.length };
+    } catch (legacyErr) {
+      return { ok: false, reason: "parse_error", index: null, error: String(legacyErr), cacheBackend: "legacy_script_property", cacheSizeBytes: legacyRaw.length };
+    }
+  }
+
+  try {
+    var meta = JSON.parse(metaRaw);
+    var shardCount = Math.max(0, toInt_(meta.shardCount, 0));
+    if (!shardCount) return { ok: false, reason: "meta_missing_shards", index: null, cacheBackend: "script_properties", cacheSizeBytes: 0 };
+
+    var shards = [];
+    var totalSize = 0;
+    for (var i = 0; i < shardCount; i++) {
+      var part = props.getProperty(PROP.ODDS_HISTORY_INDEX_SHARD_PREFIX + i) || "";
+      if (!part) return { ok: false, reason: "shard_missing_" + i, index: null, cacheBackend: "script_properties", cacheSizeBytes: totalSize };
+      shards.push(part);
+      totalSize += part.length;
+    }
+
+    var raw = shards.join("");
     var parsed = JSON.parse(raw);
-    if (!parsed || typeof parsed !== "object" || !parsed.by_id) return { ok: false, reason: "invalid_shape", index: null };
-    return { ok: true, reason: "hit", index: parsed };
+    if (!parsed || typeof parsed !== "object" || !parsed.by_id) return { ok: false, reason: "invalid_shape", index: null, cacheBackend: "script_properties", cacheSizeBytes: raw.length };
+
+    try {
+      cache.put(cacheKey, raw, ODDS_HISTORY_INDEX_CACHE_TTL_SEC_);
+    } catch (cacheWriteErr) {
+      log_("WARN", "Odds history index cache write failed", {
+        reasonCode: "cache_service_backfill_failed",
+        cacheBackend: "cache_service",
+        error: String(cacheWriteErr)
+      });
+    }
+
+    return {
+      ok: true,
+      reason: "hit_script_properties",
+      index: parsed,
+      cacheBackend: "script_properties",
+      cacheSizeBytes: raw.length
+    };
   } catch (e) {
-    return { ok: false, reason: "parse_error", index: null, error: String(e) };
+    return { ok: false, reason: "parse_error", index: null, error: String(e), cacheBackend: "script_properties", cacheSizeBytes: 0 };
   }
 }
 
 function persistOddsHistoryIndexCache_(indexObj) {
-  if (!indexObj) return;
+  if (!indexObj) return { ok: false, reasonCode: "empty_index", cacheBackend: "none", cacheSizeBytes: 0 };
+
   var payload = JSON.stringify(indexObj);
-  PropertiesService.getScriptProperties().setProperty(PROP.ODDS_HISTORY_INDEX, payload);
+  var payloadSize = payload.length;
+  var cache = CacheService.getScriptCache();
+  var props = PropertiesService.getScriptProperties();
+  var cacheBackend = "cache_service+script_properties";
+
+  if (payloadSize > (ODDS_HISTORY_INDEX_PROP_SHARD_BYTES_ * ODDS_HISTORY_INDEX_PROP_MAX_SHARDS_)) {
+    log_("WARN", "Odds history index cache persist skipped", {
+      reasonCode: "payload_exceeds_max_supported",
+      cacheBackend: "none",
+      cacheSizeBytes: payloadSize
+    });
+    return { ok: false, reasonCode: "payload_exceeds_max_supported", cacheBackend: "none", cacheSizeBytes: payloadSize };
+  }
+
+  try {
+    cache.put(PROP.ODDS_HISTORY_INDEX_CACHE, payload, ODDS_HISTORY_INDEX_CACHE_TTL_SEC_);
+  } catch (cacheErr) {
+    cacheBackend = "script_properties";
+    log_("WARN", "Odds history index cache write failed", {
+      reasonCode: "cache_service_write_failed",
+      cacheBackend: "cache_service",
+      cacheSizeBytes: payloadSize,
+      error: String(cacheErr)
+    });
+  }
+
+  if (payloadSize > ODDS_HISTORY_INDEX_PROP_MAX_BYTES_) {
+    var shardCount = Math.ceil(payloadSize / ODDS_HISTORY_INDEX_PROP_SHARD_BYTES_);
+    if (shardCount > ODDS_HISTORY_INDEX_PROP_MAX_SHARDS_) {
+      log_("WARN", "Odds history index cache persist skipped", {
+        reasonCode: "shard_limit_exceeded",
+        cacheBackend: "none",
+        cacheSizeBytes: payloadSize,
+        shardCount: shardCount
+      });
+      return { ok: false, reasonCode: "shard_limit_exceeded", cacheBackend: "none", cacheSizeBytes: payloadSize };
+    }
+
+    try {
+      props.setProperty(PROP.ODDS_HISTORY_INDEX_META, JSON.stringify({
+        version: 1,
+        shardCount: shardCount,
+        cacheSizeBytes: payloadSize,
+        updatedAtMs: Date.now()
+      }));
+      for (var i = 0; i < shardCount; i++) {
+        props.setProperty(
+          PROP.ODDS_HISTORY_INDEX_SHARD_PREFIX + i,
+          payload.substring(i * ODDS_HISTORY_INDEX_PROP_SHARD_BYTES_, (i + 1) * ODDS_HISTORY_INDEX_PROP_SHARD_BYTES_)
+        );
+      }
+      cleanupOddsHistoryIndexShards_(props, shardCount);
+      props.deleteProperty(PROP.ODDS_HISTORY_INDEX);
+      return { ok: true, reasonCode: "persisted_sharded", cacheBackend: cacheBackend, cacheSizeBytes: payloadSize, shardCount: shardCount };
+    } catch (propErr) {
+      log_("WARN", "Odds history index cache write failed", {
+        reasonCode: "script_properties_sharded_write_failed",
+        cacheBackend: "script_properties",
+        cacheSizeBytes: payloadSize,
+        error: String(propErr)
+      });
+      return { ok: false, reasonCode: "script_properties_sharded_write_failed", cacheBackend: cacheBackend, cacheSizeBytes: payloadSize };
+    }
+  }
+
+  try {
+    props.setProperty(PROP.ODDS_HISTORY_INDEX, payload);
+    props.setProperty(PROP.ODDS_HISTORY_INDEX_META, JSON.stringify({
+      version: 1,
+      shardCount: 1,
+      cacheSizeBytes: payloadSize,
+      storage: "single_property",
+      updatedAtMs: Date.now()
+    }));
+    props.setProperty(PROP.ODDS_HISTORY_INDEX_SHARD_PREFIX + 0, payload);
+    cleanupOddsHistoryIndexShards_(props, 1);
+    return { ok: true, reasonCode: "persisted_single_property", cacheBackend: cacheBackend, cacheSizeBytes: payloadSize, shardCount: 1 };
+  } catch (singleErr) {
+    log_("WARN", "Odds history index cache write failed", {
+      reasonCode: "script_properties_single_write_failed",
+      cacheBackend: "script_properties",
+      cacheSizeBytes: payloadSize,
+      error: String(singleErr)
+    });
+    return { ok: false, reasonCode: "script_properties_single_write_failed", cacheBackend: cacheBackend, cacheSizeBytes: payloadSize };
+  }
 }
 
 function buildOddsHistoryIndexFromRows_(rows, preStartMin) {
@@ -833,12 +998,15 @@ function rebuildOddsHistoryIndexCache_(preStartMin, reason) {
   if (!sh) return { version: 1, pre_start_min: Math.max(0, toInt_(preStartMin, 15)), built_at_ms: Date.now(), by_id: {} };
   var rows = readSheetAsObjects_(sh);
   var indexObj = buildOddsHistoryIndexFromRows_(rows, preStartMin);
-  persistOddsHistoryIndexCache_(indexObj);
+  var persistRes = persistOddsHistoryIndexCache_(indexObj);
   log_("INFO", "Odds history index rebuilt", {
     reasonCode: String(reason || "rebuild_requested"),
     gamesIndexed: Object.keys(indexObj.by_id || {}).length,
     rowsScanned: rows.length,
-    preStartMin: indexObj.pre_start_min
+    preStartMin: indexObj.pre_start_min,
+    cacheBackend: String((persistRes && persistRes.cacheBackend) || "none"),
+    cacheSizeBytes: toInt_(persistRes && persistRes.cacheSizeBytes, 0),
+    cachePersistReasonCode: String((persistRes && persistRes.reasonCode) || "none")
   });
   return indexObj;
 }
@@ -847,7 +1015,11 @@ function getOddsHistoryIndexOrRebuild_(preStartMin) {
   var targetPreStartMin = Math.max(0, toInt_(preStartMin, 15));
   var cacheRes = getOddsHistoryIndexCache_();
   if (!cacheRes.ok) {
-    log_("INFO", "Odds history index cache miss", { reasonCode: cacheRes.reason || "missing" });
+    log_("INFO", "Odds history index cache miss", {
+      reasonCode: cacheRes.reason || "missing",
+      cacheBackend: String(cacheRes.cacheBackend || "none"),
+      cacheSizeBytes: toInt_(cacheRes.cacheSizeBytes, 0)
+    });
     return rebuildOddsHistoryIndexCache_(targetPreStartMin, "cache_" + String(cacheRes.reason || "miss"));
   }
 
@@ -863,7 +1035,9 @@ function getOddsHistoryIndexOrRebuild_(preStartMin) {
 
   log_("INFO", "Odds history index cache hit", {
     gamesIndexed: Object.keys(indexObj.by_id || {}).length,
-    preStartMin: targetPreStartMin
+    preStartMin: targetPreStartMin,
+    cacheBackend: String(cacheRes.cacheBackend || "unknown"),
+    cacheSizeBytes: toInt_(cacheRes.cacheSizeBytes, 0)
   });
   return indexObj;
 }
@@ -875,7 +1049,11 @@ function updateOddsHistoryIndexIncremental_(historyRows, preStartMin) {
   var indexObj = null;
 
   if (!cacheRes.ok) {
-    log_("INFO", "Odds history index incremental update cache miss", { reasonCode: cacheRes.reason || "missing" });
+    log_("INFO", "Odds history index incremental update cache miss", {
+      reasonCode: cacheRes.reason || "missing",
+      cacheBackend: String(cacheRes.cacheBackend || "none"),
+      cacheSizeBytes: toInt_(cacheRes.cacheSizeBytes, 0)
+    });
     indexObj = rebuildOddsHistoryIndexCache_(targetPreStartMin, "incremental_cache_miss");
     return indexObj;
   }
@@ -924,11 +1102,14 @@ function updateOddsHistoryIndexIncremental_(historyRows, preStartMin) {
 
   indexObj.pre_start_min = targetPreStartMin;
   indexObj.built_at_ms = Date.now();
-  persistOddsHistoryIndexCache_(indexObj);
+  var persistRes = persistOddsHistoryIndexCache_(indexObj);
   log_("INFO", "Odds history index incremental update completed", {
     appendedRows: historyRows.length,
     gamesIndexed: Object.keys(indexObj.by_id || {}).length,
-    preStartMin: targetPreStartMin
+    preStartMin: targetPreStartMin,
+    cacheBackend: String((persistRes && persistRes.cacheBackend) || "none"),
+    cacheSizeBytes: toInt_(persistRes && persistRes.cacheSizeBytes, 0),
+    cachePersistReasonCode: String((persistRes && persistRes.reasonCode) || "none")
   });
   return indexObj;
 }
