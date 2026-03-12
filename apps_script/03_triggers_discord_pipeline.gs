@@ -1269,13 +1269,33 @@ function runPipeline(opts) {
     var cadenceState = updatePipelineCadenceState_(cfg, props, mlbRes.matchedCount, modelRes.computed);
 
     var rejectionSummaryText = JSON.stringify(mlbRes.rejectionSummary || {});
-    var summary = "odds=" + oddsRes.games + " matched=" + mlbRes.matchedCount + " computed=" + modelRes.computed + " bets=" + modelRes.betSignalsFound + " cadenceMode=" + cadenceState.mode + " cadenceReason=" + cadenceState.reason + " cadenceMin=" + cadenceState.cadenceMinutes + " zeroStreak=" + cadenceState.zeroStreak + " lineupFallbackUsed=" + (modelRes.lineupFallbackUsed ? "Y" : "N") + " lineupFallbackGames=" + (modelRes.lineupFallbackGames || 0) + " weatherApplied=" + (modelRes.weatherAppliedGames || 0) + " bullpenApplied=" + (modelRes.bullpenFeatureAppliedGames || 0) + " experimentalApplied=" + (modelRes.experimentalAppliedGames || 0) + " expandedWindowFallback=" + (mlbRes.expandedWindowFallbackUsed ? "Y" : "N") + " rejects=" + rejectionSummaryText;
+    var fullSummary = "odds=" + oddsRes.games + " matched=" + mlbRes.matchedCount + " computed=" + modelRes.computed + " bets=" + modelRes.betSignalsFound + " cadenceMode=" + cadenceState.mode + " cadenceReason=" + cadenceState.reason + " cadenceMin=" + cadenceState.cadenceMinutes + " zeroStreak=" + cadenceState.zeroStreak + " lineupFallbackUsed=" + (modelRes.lineupFallbackUsed ? "Y" : "N") + " lineupFallbackGames=" + (modelRes.lineupFallbackGames || 0) + " weatherApplied=" + (modelRes.weatherAppliedGames || 0) + " bullpenApplied=" + (modelRes.bullpenFeatureAppliedGames || 0) + " experimentalApplied=" + (modelRes.experimentalAppliedGames || 0) + " expandedWindowFallback=" + (mlbRes.expandedWindowFallbackUsed ? "Y" : "N") + " rejects=" + rejectionSummaryText;
+    var runState = updatePipelineRunStateTelemetry_(props, cfg, {
+      windowSource: oddsWindowCtx.source,
+      shouldRefreshOdds: shouldRefreshOdds,
+      matched: mlbRes.matchedCount,
+      computed: modelRes.computed,
+      cadenceMode: cadenceState.mode,
+      cadenceReason: cadenceState.reason,
+      rejectionSummary: mlbRes.rejectionSummary || {}
+    });
+    var summary = runState.suppressVerbose
+      ? ("state_unchanged repeat=" + runState.repeatCount + " sig=" + runState.signature.slice(0, 12))
+      : fullSummary;
 
     props.setProperty(PROP.LAST_PIPELINE_AT, startedUtc);
     props.setProperty(PROP.LAST_PIPELINE_STATUS, "OK");
     props.setProperty(PROP.LAST_PIPELINE_SUMMARY, summary);
 
-    log_("INFO", "runPipeline completed", { odds: oddsRes.games, matched: mlbRes.matchedCount, computed: modelRes.computed, betSignalsFound: modelRes.betSignalsFound, cadenceMode: cadenceState.mode, cadenceReason: cadenceState.reason, cadenceMinutes: cadenceState.cadenceMinutes, zeroStreak: cadenceState.zeroStreak, lineupFallbackMode: modelRes.lineupFallbackMode, lineupFallbackUsed: modelRes.lineupFallbackUsed, lineupFallbackGames: modelRes.lineupFallbackGames, weatherAppliedGames: modelRes.weatherAppliedGames || 0, bullpenFeatureAppliedGames: modelRes.bullpenFeatureAppliedGames || 0, experimentalAppliedGames: modelRes.experimentalAppliedGames || 0, externalFeatureFetchLogs: modelRes.externalFeatureFetchLogs || [], expandedWindowFallbackUsed: !!mlbRes.expandedWindowFallbackUsed, rejectionSummary: mlbRes.rejectionSummary || {} });
+    if (runState.suppressVerbose) {
+      log_("INFO", "state_unchanged", {
+        repeatCount: runState.repeatCount,
+        heartbeatEvery: runState.heartbeatEvery,
+        signature: runState.signature
+      });
+    } else {
+      log_("INFO", "runPipeline completed", { odds: oddsRes.games, matched: mlbRes.matchedCount, computed: modelRes.computed, betSignalsFound: modelRes.betSignalsFound, cadenceMode: cadenceState.mode, cadenceReason: cadenceState.reason, cadenceMinutes: cadenceState.cadenceMinutes, zeroStreak: cadenceState.zeroStreak, lineupFallbackMode: modelRes.lineupFallbackMode, lineupFallbackUsed: modelRes.lineupFallbackUsed, lineupFallbackGames: modelRes.lineupFallbackGames, weatherAppliedGames: modelRes.weatherAppliedGames || 0, bullpenFeatureAppliedGames: modelRes.bullpenFeatureAppliedGames || 0, experimentalAppliedGames: modelRes.experimentalAppliedGames || 0, externalFeatureFetchLogs: modelRes.externalFeatureFetchLogs || [], expandedWindowFallbackUsed: !!mlbRes.expandedWindowFallbackUsed, rejectionSummary: mlbRes.rejectionSummary || {}, runStateTransitioned: runState.transitioned, runStateRepeatCount: runState.repeatCount, runStateHeartbeatDue: runState.heartbeatDue, runStateSignature: runState.signature });
+    }
   } catch (e) {
     props.setProperty(PROP.LAST_PIPELINE_AT, startedUtc);
     props.setProperty(PROP.LAST_PIPELINE_STATUS, "ERROR");
@@ -1289,6 +1309,78 @@ function runPipeline(opts) {
 }
 
 
+
+
+function canonicalJsonForSignature_(value) {
+  if (value === null || value === undefined) return "null";
+  var t = typeof value;
+  if (t === "number") return isFinite(value) ? String(value) : "null";
+  if (t === "boolean") return value ? "true" : "false";
+  if (t === "string") return JSON.stringify(value);
+  if (Object.prototype.toString.call(value) === "[object Date]") return JSON.stringify(value.toISOString());
+  if (Array.isArray(value)) {
+    var arr = [];
+    for (var i = 0; i < value.length; i++) arr.push(canonicalJsonForSignature_(value[i]));
+    return "[" + arr.join(",") + "]";
+  }
+  if (t === "object") {
+    var keys = Object.keys(value).sort();
+    var parts = [];
+    for (var k = 0; k < keys.length; k++) {
+      var key = keys[k];
+      parts.push(JSON.stringify(key) + ":" + canonicalJsonForSignature_(value[key]));
+    }
+    return "{" + parts.join(",") + "}";
+  }
+  return JSON.stringify(String(value));
+}
+
+function shortHash16_(raw) {
+  var bytes = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, String(raw || ""));
+  var out = [];
+  for (var i = 0; i < bytes.length; i++) {
+    var v = (bytes[i] + 256) % 256;
+    var hx = v.toString(16);
+    out.push(hx.length === 1 ? "0" + hx : hx);
+  }
+  return out.join("").slice(0, 16);
+}
+
+function computePipelineRunStateSignature_(state) {
+  var rejectionHash = shortHash16_(canonicalJsonForSignature_(state.rejectionSummary || {}));
+  var pieces = [
+    "window=" + String(state.windowSource || ""),
+    "refreshOdds=" + (state.shouldRefreshOdds ? "Y" : "N"),
+    "matched=" + Math.max(0, toInt_(state.matched, 0)),
+    "computed=" + Math.max(0, toInt_(state.computed, 0)),
+    "cadenceMode=" + String(state.cadenceMode || ""),
+    "cadenceReason=" + String(state.cadenceReason || ""),
+    "rejectHash=" + rejectionHash
+  ];
+  return pieces.join("|");
+}
+
+function updatePipelineRunStateTelemetry_(props, cfg, state) {
+  var signature = computePipelineRunStateSignature_(state || {});
+  var prevSignature = String(props.getProperty(PROP.PIPELINE_LAST_STATE_SIGNATURE) || "");
+  var heartbeatEvery = Math.max(1, toInt_(cfg.PIPELINE_STATE_HEARTBEAT_EVERY, 10));
+  var transitioned = !prevSignature || prevSignature !== signature;
+  var repeatCount = transitioned ? 0 : Math.max(0, toInt_(props.getProperty(PROP.PIPELINE_STATE_REPEAT_COUNT), 0)) + 1;
+  var heartbeatDue = !transitioned && (repeatCount % heartbeatEvery === 0);
+
+  props.setProperty(PROP.PIPELINE_LAST_STATE_SIGNATURE, signature);
+  props.setProperty(PROP.PIPELINE_STATE_REPEAT_COUNT, String(repeatCount));
+
+  return {
+    signature: signature,
+    previousSignature: prevSignature,
+    repeatCount: repeatCount,
+    transitioned: transitioned,
+    heartbeatEvery: heartbeatEvery,
+    heartbeatDue: heartbeatDue,
+    suppressVerbose: !transitioned && !heartbeatDue
+  };
+}
 
 function resolveOddsWindowForPipeline_(cfg, props) {
   var cacheTtlMin = Math.max(1, toInt_(cfg.ODDS_WINDOW_CACHE_TTL_MIN, 30));
