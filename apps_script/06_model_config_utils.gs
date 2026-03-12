@@ -981,7 +981,7 @@ function maybeNotifyDiscord_(cfg, oddsId, dateKey, payload) {
 }
 
 
-function getLatestOddsByGameId_() {
+function getCloseSourceSnapshotsByGameId_() {
   var ss = SpreadsheetApp.getActive();
   var sh = ss.getSheetByName(SH.ODDS_HISTORY);
   if (!sh) return {};
@@ -991,13 +991,77 @@ function getLatestOddsByGameId_() {
     var r = rows[i] || {};
     var oddsId = String(r.odds_game_id || "");
     if (!oddsId) continue;
-    out[oddsId] = {
+    var capturedAtLocal = String(r.captured_at_local || "");
+    var capturedAtUtc = String(r.captured_at_utc || "");
+    var capturedAtMs = Date.parse(capturedAtUtc || capturedAtLocal);
+    if (!out[oddsId]) out[oddsId] = [];
+    out[oddsId].push({
       away_price: toFloat_(r.away_odds_decimal, NaN),
       home_price: toFloat_(r.home_odds_decimal, NaN),
       away_implied: toFloat_(r.away_implied, NaN),
       home_implied: toFloat_(r.home_implied, NaN),
-      commence_time_utc: String(r.commence_time_utc || "")
-    };
+      commence_time_utc: String(r.commence_time_utc || ""),
+      captured_at_local: capturedAtLocal,
+      captured_at_utc: capturedAtUtc,
+      captured_at_ms: isFinite(capturedAtMs) ? capturedAtMs : NaN,
+      row_index: i
+    });
+  }
+  return out;
+}
+
+function selectCloseSnapshotsByGameId_(snapshotsByOddsId, preStartMin, nowMs) {
+  var out = {};
+  var cutoffOffsetMs = Math.max(0, Number(preStartMin) || 0) * 60000;
+  var ids = Object.keys(snapshotsByOddsId || {});
+  for (var i = 0; i < ids.length; i++) {
+    var oddsId = ids[i];
+    var snapshots = (snapshotsByOddsId[oddsId] || []).slice(0);
+    if (!snapshots.length) {
+      out[oddsId] = { snapshot: null, reason: "close_no_snapshot_before_cutoff" };
+      continue;
+    }
+
+    snapshots.sort(function (a, b) {
+      var aMs = isFinite(a.captured_at_ms) ? a.captured_at_ms : -Infinity;
+      var bMs = isFinite(b.captured_at_ms) ? b.captured_at_ms : -Infinity;
+      if (aMs !== bMs) return aMs - bMs;
+      return Number(a.row_index || 0) - Number(b.row_index || 0);
+    });
+
+    var commenceMs = NaN;
+    for (var s = snapshots.length - 1; s >= 0; s--) {
+      var parsedCommence = Date.parse(String(snapshots[s].commence_time_utc || ""));
+      if (isFinite(parsedCommence)) {
+        commenceMs = parsedCommence;
+        break;
+      }
+    }
+    var cutoffMs = isFinite(commenceMs) ? (commenceMs - cutoffOffsetMs) : NaN;
+    if (isFinite(cutoffMs) && isFinite(nowMs) && nowMs < cutoffMs) {
+      out[oddsId] = { snapshot: null, reason: "close_still_too_early", cutoff_ms: cutoffMs };
+      continue;
+    }
+
+    var selected = null;
+    for (var j = snapshots.length - 1; j >= 0; j--) {
+      var snap = snapshots[j];
+      if (!isFinite(cutoffMs)) {
+        selected = snap;
+        break;
+      }
+      if (isFinite(snap.captured_at_ms) && snap.captured_at_ms <= cutoffMs) {
+        selected = snap;
+        break;
+      }
+    }
+
+    if (!selected) {
+      out[oddsId] = { snapshot: null, reason: "close_no_snapshot_before_cutoff", cutoff_ms: cutoffMs };
+      continue;
+    }
+
+    out[oddsId] = { snapshot: selected, reason: "" };
   }
   return out;
 }
@@ -1028,7 +1092,8 @@ function updateSignalLogCloseMetrics() {
   var cfg = getConfig_();
   var preStartMin = Math.max(0, toInt_(cfg.SIGNAL_CLOSE_PRESTART_MIN, 15));
   var nowMs = Date.now();
-  var latestByOddsId = getLatestOddsByGameId_();
+  var closeSourceByOddsId = getCloseSourceSnapshotsByGameId_();
+  var selectedCloseByOddsId = selectCloseSnapshotsByGameId_(closeSourceByOddsId, preStartMin, nowMs);
   var updatedRows = 0;
   var skippedRows = 0;
 
@@ -1047,15 +1112,14 @@ function updateSignalLogCloseMetrics() {
       continue;
     }
 
-    var latestEntry = latestByOddsId[oddsId] || null;
-    var commenceMs = latestEntry ? Date.parse(String(latestEntry.commence_time_utc || "")) : NaN;
-    if (isFinite(commenceMs) && nowMs < (commenceMs - preStartMin * 60000)) {
-      row[idx.close_reason_code] = "close_not_ready_time_window";
+    var selection = selectedCloseByOddsId[oddsId] || null;
+    if (!selection || !selection.snapshot) {
+      row[idx.close_reason_code] = String((selection && selection.reason) || "close_no_snapshot_before_cutoff");
       skippedRows++;
       continue;
     }
 
-    var closeEntry = getPickSideOdds_(latestEntry, pickSide);
+    var closeEntry = getPickSideOdds_(selection.snapshot, pickSide);
     if (!isFinite(closeEntry.price) || !isFinite(closeEntry.implied)) {
       row[idx.close_price_pick] = "";
       row[idx.close_implied_pick] = "";

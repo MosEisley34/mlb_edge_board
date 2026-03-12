@@ -38,7 +38,8 @@ Apps Script loads global functions/variables across files, so order is mostly fo
   - `delta_signal_to_close_price`, `delta_signal_to_close_implied`
 - Guardrails:
   - Missing opening values keep open/drift fields blank and set `open_reason_code`.
-  - Missing/too-early close values keep close/CLV fields blank and set `close_reason_code`.
+  - Close snapshot selection uses a cutoff at `commence_time_utc - SIGNAL_CLOSE_PRESTART_MIN`: choose the latest snapshot captured at or before cutoff (nearest earlier fallback when exact cutoff snapshot is unavailable).
+  - If no snapshot exists at/before cutoff, close/CLV fields remain blank with `close_no_snapshot_before_cutoff`; if current time is still before cutoff, reason is `close_still_too_early`.
   - Optional time trigger: enable `ENABLE_SIGNAL_CLOSE_UPDATER=TRUE` and tune `SIGNAL_CLOSE_UPDATER_MINUTES` / `SIGNAL_CLOSE_PRESTART_MIN`.
 
 ## Odds API usage profiles (`ODDS_USAGE_PROFILE`)
