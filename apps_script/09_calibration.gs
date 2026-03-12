@@ -263,46 +263,69 @@ function fetchMlbGameOutcomeByPk_(gamePk) {
 function computeCalibrationReport_(cfg) {
   var ss = SpreadsheetApp.getActive();
   var sh = ss.getSheetByName(SH.CALIBRATION_SNAPSHOTS);
-  if (!sh || sh.getLastRow() < 2) return { windowDays: cfg.CALIBRATION_WINDOW_DAYS, sampleSize: 0, resolvedCount: 0, pendingCount: 0, summary: "Calibration: no snapshots yet.", suggestions: [] };
+  if (!sh || sh.getLastRow() < 2) return { windowDays: cfg.CALIBRATION_WINDOW_DAYS, sampleSize: 0, resolvedCount: 0, pendingCount: 0, summary: "Calibration: no snapshots yet.", suggestions: [], rolling: {}, alerts: [] };
 
   var rows = readSheetAsObjects_(sh);
   var windowDays = Math.max(7, toInt_(cfg.CALIBRATION_WINDOW_DAYS, 30));
   var edgeCuts = (cfg.CALIBRATION_EDGE_BUCKETS && cfg.CALIBRATION_EDGE_BUCKETS.length) ? cfg.CALIBRATION_EDGE_BUCKETS : [0, 0.02, 0.04, 0.06, 0.10];
+  var nowMs = new Date().getTime();
 
-  var cutoffMs = new Date().getTime() - windowDays * 24 * 3600 * 1000;
   var scoped = [];
-  for (var i = 0; i < rows.length; i++) {
-    var dt = Date.parse(String(rows[i].snapshot_at_local || ""));
-    if (!isFinite(dt) || dt < cutoffMs) continue;
-    scoped.push(rows[i]);
-  }
-
-  var resolved = [];
+  var resolvedScoped = [];
   var pendingCount = 0;
-  for (var j = 0; j < scoped.length; j++) {
-    var rr = scoped[j];
-    var result = String(rr.result || "").toUpperCase();
-    if (result === "WIN" || result === "LOSS") resolved.push(rr);
+  var cutoffMs = nowMs - windowDays * 24 * 3600 * 1000;
+
+  for (var i = 0; i < rows.length; i++) {
+    var row = rows[i] || {};
+    var snapMs = Date.parse(String(row.snapshot_at_local || ""));
+    if (!isFinite(snapMs) || snapMs < cutoffMs) continue;
+    scoped.push(row);
+
+    var result = String(row.result || "").toUpperCase();
+    if (result === "WIN" || result === "LOSS") resolvedScoped.push(row);
     else pendingCount++;
   }
 
   var metrics = {
-    byTier: bucketMetrics_(resolved, function (r) { return String(r.bet_tier || "UNTIERED") || "UNTIERED"; }),
-    byEdgeBucket: bucketMetrics_(resolved, function (r) { return edgeBucketLabel_(Math.abs(Number(r.bet_edge || 0)), edgeCuts); }),
-    byConfidenceBucket: bucketMetrics_(resolved, function (r) { return confidenceBucketLabel_(Number(r.confidence || 0)); }),
-    byFeatureSet: bucketMetrics_(resolved, function (r) { return String(r.feature_set || "BASELINE").toUpperCase(); }),
-    byTeam: bucketMetrics_(resolved, function (r) { return String(r.pick_team_id || r.pick_team || "UNKNOWN"); }),
-    byHomeAway: bucketMetrics_(resolved, function (r) { return String(r.pick_home_away || "UNKNOWN"); })
+    byTier: bucketMetrics_(resolvedScoped, function (r) { return String(r.bet_tier || "UNTIERED") || "UNTIERED"; }),
+    byEdgeBucket: bucketMetrics_(resolvedScoped, function (r) { return edgeBucketLabel_(Math.abs(Number(r.bet_edge || 0)), edgeCuts); }),
+    byConfidenceBucket: bucketMetrics_(resolvedScoped, function (r) { return confidenceBucketLabel_(Number(r.confidence || 0)); }),
+    byFeatureSet: bucketMetrics_(resolvedScoped, function (r) { return String(r.feature_set || "BASELINE").toUpperCase(); }),
+    byTeam: bucketMetrics_(resolvedScoped, function (r) { return String(r.pick_team_id || r.pick_team || "UNKNOWN"); }),
+    byHomeAway: bucketMetrics_(resolvedScoped, function (r) { return String(r.pick_home_away || "UNKNOWN"); })
   };
 
-  var overall = aggregateMetrics_(resolved);
+  var overall = aggregateMetrics_(resolvedScoped);
   var suggestions = calibrationSuggestions_(overall, metrics.byEdgeBucket, cfg);
+
+  var resolvedAll = [];
+  for (var j = 0; j < rows.length; j++) {
+    var rr = rows[j] || {};
+    var res = String(rr.result || "").toUpperCase();
+    if (res !== "WIN" && res !== "LOSS") continue;
+    var resolvedMs = calibrationResolvedAtMs_(rr);
+    if (!isFinite(resolvedMs)) continue;
+    resolvedAll.push(rr);
+  }
+
+  var rollingWindows = [7, 14, 30];
+  var rolling = {};
+  var alerts = [];
+  for (var w = 0; w < rollingWindows.length; w++) {
+    var days = rollingWindows[w];
+    rolling[String(days)] = computeCalibrationRollingWindow_(resolvedAll, days, nowMs, cfg);
+    alerts = alerts.concat(buildCalibrationAlertsForWindow_(rolling[String(days)], cfg));
+  }
+
+  appendCalibrationTrendRows_(ss, rolling, alerts);
+
   var fsBase = metrics.byFeatureSet.BASELINE || { n: 0, roi: "" };
   var fsEnh = metrics.byFeatureSet.ENHANCED || { n: 0, roi: "" };
-  var summary = "Calibration " + windowDays + "d: resolved=" + resolved.length + " pending=" + pendingCount +
+  var summary = "Calibration " + windowDays + "d: resolved=" + resolvedScoped.length + " pending=" + pendingCount +
     " brier(model=" + round_(overall.brierModel, 4) + ", market=" + round_(overall.brierMarket, 4) +
     ") roi=" + round_(overall.roi, 3) + " bias=" + round_(overall.biasModel, 3) +
-    " featureSet(base_n=" + fsBase.n + ", base_roi=" + round_(fsBase.roi, 3) + ", enh_n=" + fsEnh.n + ", enh_roi=" + round_(fsEnh.roi, 3) + ")";
+    " featureSet(base_n=" + fsBase.n + ", base_roi=" + round_(fsBase.roi, 3) + ", enh_n=" + fsEnh.n + ", enh_roi=" + round_(fsEnh.roi, 3) + ")" +
+    " rolling7(n=" + ((rolling["7"] && rolling["7"].overall && rolling["7"].overall.n) || 0) + ", roi=" + round_(((rolling["7"] && rolling["7"].overall && rolling["7"].overall.roi) || 0), 3) + ")";
 
   var shReport = ss.getSheetByName(SH.CALIBRATION_REPORT);
   if (shReport) {
@@ -310,16 +333,156 @@ function computeCalibrationReport_(cfg) {
       isoLocalWithOffset_(new Date()),
       windowDays,
       scoped.length,
-      resolved.length,
+      resolvedScoped.length,
       pendingCount,
-      JSON.stringify({ overall: overall, metrics: metrics, suggestions: suggestions }),
+      JSON.stringify({ overall: overall, metrics: metrics, rolling: rolling, alerts: alerts, suggestions: suggestions }),
       summary
     ]);
   }
 
-  PropertiesService.getScriptProperties().setProperty(PROP.LAST_CALIBRATION_SUMMARY, summary + " | " + suggestions.join("; "));
+  var alertSummary = alerts.map(function (a) { return a.windowDays + "d:" + a.code + "(" + a.scope + ")"; }).join(", ");
+  PropertiesService.getScriptProperties().setProperty(PROP.LAST_CALIBRATION_SUMMARY, summary + " | " + suggestions.join("; ") + (alertSummary ? (" | alerts=" + alertSummary) : ""));
 
-  return { windowDays: windowDays, sampleSize: scoped.length, resolvedCount: resolved.length, pendingCount: pendingCount, overall: overall, metrics: metrics, suggestions: suggestions, summary: summary };
+  return {
+    windowDays: windowDays,
+    sampleSize: scoped.length,
+    resolvedCount: resolvedScoped.length,
+    pendingCount: pendingCount,
+    overall: overall,
+    metrics: metrics,
+    rolling: rolling,
+    alerts: alerts,
+    suggestions: suggestions,
+    summary: summary
+  };
+}
+
+function calibrationResolvedAtMs_(row) {
+  var resolvedMs = Date.parse(String(row.resolved_at_local || ""));
+  if (isFinite(resolvedMs)) return resolvedMs;
+  var snapshotMs = Date.parse(String(row.snapshot_at_local || ""));
+  return isFinite(snapshotMs) ? snapshotMs : NaN;
+}
+
+function computeCalibrationRollingWindow_(resolvedRows, windowDays, nowMs, cfg) {
+  var cutoffMs = nowMs - (windowDays * 24 * 3600 * 1000);
+  var scoped = [];
+  for (var i = 0; i < resolvedRows.length; i++) {
+    var row = resolvedRows[i] || {};
+    var rowMs = calibrationResolvedAtMs_(row);
+    if (!isFinite(rowMs) || rowMs < cutoffMs) continue;
+    scoped.push(row);
+  }
+
+  var byFeatureSet = bucketMetrics_(scoped, function (r) { return String(r.feature_set || "BASELINE").toUpperCase(); });
+  var baseline = byFeatureSet.BASELINE || aggregateMetrics_([]);
+  var enhanced = byFeatureSet.ENHANCED || aggregateMetrics_([]);
+  var overall = aggregateMetrics_(scoped);
+
+  var deltas = {
+    winRate: calibrationDelta_(enhanced.hitRate, baseline.hitRate),
+    roi: calibrationDelta_(enhanced.roi, baseline.roi),
+    brierModel: calibrationDelta_(enhanced.brierModel, baseline.brierModel),
+    brierDeltaVsMarket: calibrationDelta_(
+      calibrationDelta_(enhanced.brierModel, enhanced.brierMarket),
+      calibrationDelta_(baseline.brierModel, baseline.brierMarket)
+    )
+  };
+
+  return {
+    windowDays: windowDays,
+    overall: overall,
+    byFeatureSet: { BASELINE: baseline, ENHANCED: enhanced },
+    deltas: deltas
+  };
+}
+
+function calibrationDelta_(a, b) {
+  if (!isFinite(a) || !isFinite(b)) return "";
+  return a - b;
+}
+
+function buildCalibrationAlertsForWindow_(windowMetrics, cfg) {
+  var out = [];
+  if (!windowMetrics || !windowMetrics.overall) return out;
+
+  var minSample = Math.max(1, toInt_(cfg.CALIBRATION_ALERT_MIN_SAMPLE, 15));
+  var maxBrierGap = Math.max(0, toFloat_(cfg.CALIBRATION_ALERT_BRIER_GAP, 0.010));
+  var windowDays = windowMetrics.windowDays;
+
+  var scopes = ["OVERALL", "BASELINE", "ENHANCED"];
+  for (var i = 0; i < scopes.length; i++) {
+    var scope = scopes[i];
+    var m = scope === "OVERALL" ? windowMetrics.overall : windowMetrics.byFeatureSet[scope];
+    if (!m) continue;
+
+    if (m.n < minSample) {
+      out.push({
+        code: "LOW_SAMPLE",
+        windowDays: windowDays,
+        scope: scope,
+        detail: "n=" + m.n + " < " + minSample
+      });
+    }
+
+    if (isFinite(m.brierModel) && isFinite(m.brierMarket) && (m.brierModel - m.brierMarket) > maxBrierGap) {
+      out.push({
+        code: "MODEL_UNDER_MARKET",
+        windowDays: windowDays,
+        scope: scope,
+        detail: "brier_gap=" + round_(m.brierModel - m.brierMarket, 4) + " > " + round_(maxBrierGap, 4)
+      });
+    }
+  }
+
+  return out;
+}
+
+function appendCalibrationTrendRows_(ss, rolling, alerts) {
+  var shTrend = ss.getSheetByName(SH.CALIBRATION_TRENDS);
+  if (!shTrend) return;
+
+  var nowIso = isoLocalWithOffset_(new Date());
+  var alertMap = {};
+  for (var i = 0; i < alerts.length; i++) {
+    var a = alerts[i] || {};
+    var key = String(a.windowDays) + "|" + String(a.scope || "OVERALL");
+    if (!alertMap[key]) alertMap[key] = [];
+    alertMap[key].push(a);
+  }
+
+  var rows = [];
+  var windows = [7, 14, 30];
+  var scopes = ["BASELINE", "ENHANCED"];
+  for (var w = 0; w < windows.length; w++) {
+    var win = rolling[String(windows[w])];
+    if (!win) continue;
+
+    for (var sIdx = 0; sIdx < scopes.length; sIdx++) {
+      var scope = scopes[sIdx];
+      var m = win.byFeatureSet[scope] || aggregateMetrics_([]);
+      var key = String(windows[w]) + "|" + scope;
+      var aList = alertMap[key] || [];
+      rows.push([
+        nowIso,
+        windows[w],
+        scope,
+        m.n,
+        isFinite(m.hitRate) ? round_(m.hitRate, 4) : "",
+        isFinite(m.roi) ? round_(m.roi, 4) : "",
+        isFinite(m.brierModel) ? round_(m.brierModel, 4) : "",
+        isFinite(m.brierMarket) ? round_(m.brierMarket, 4) : "",
+        (isFinite(m.brierModel) && isFinite(m.brierMarket)) ? round_(m.brierModel - m.brierMarket, 4) : "",
+        isFinite(win.deltas.winRate) ? round_(win.deltas.winRate, 4) : "",
+        isFinite(win.deltas.roi) ? round_(win.deltas.roi, 4) : "",
+        isFinite(win.deltas.brierModel) ? round_(win.deltas.brierModel, 4) : "",
+        aList.map(function (a) { return a.code; }).join("|"),
+        aList.map(function (a) { return a.detail; }).join("; ")
+      ]);
+    }
+  }
+
+  if (rows.length) shTrend.getRange(shTrend.getLastRow() + 1, 1, rows.length, rows[0].length).setValues(rows);
 }
 
 function bucketMetrics_(rows, bucketFn) {

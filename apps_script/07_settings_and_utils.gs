@@ -120,6 +120,8 @@ function ensureSettings_(sh) {
     ["EXT_FEATURES_EXPERIMENTAL_DISABLE_MIN", "120", "Minutes to keep experimental source disabled after breaker trips"],
     ["CALIBRATION_WINDOW_DAYS", "30", "Days of snapshots to include in calibration report"],
     ["CALIBRATION_EDGE_BUCKETS", "0,0.02,0.04,0.06,0.10", "Absolute edge bucket boundaries for calibration summaries"],
+    ["CALIBRATION_ALERT_MIN_SAMPLE", "15", "Raise an alert when a rolling window has fewer resolved bets than this threshold"],
+    ["CALIBRATION_ALERT_BRIER_GAP", "0.010", "Raise an alert when model Brier exceeds market Brier by more than this amount"],
 
     ["RS_EDGE_MICRO", "0.020", ""], ["RS_EDGE_SMALL", "0.040", ""], ["RS_EDGE_MED", "0.055", ""], ["RS_EDGE_STRONG", "0.065", ""], ["RS_CONF_MIN", "62", ""],
     ["PS_EDGE_MICRO", "0.018", ""], ["PS_EDGE_SMALL", "0.028", ""], ["PS_EDGE_MED", "0.040", ""], ["PS_EDGE_STRONG", "0.050", ""], ["PS_CONF_MIN", "55", ""],
@@ -261,6 +263,8 @@ function getConfig_() {
   cfg.SIGNAL_CLOSE_PRESTART_MIN = Math.max(0, toInt_(cfg.SIGNAL_CLOSE_PRESTART_MIN, 15));
   cfg.CALIBRATION_WINDOW_DAYS = Math.max(7, toInt_(cfg.CALIBRATION_WINDOW_DAYS, 30));
   cfg.CALIBRATION_EDGE_BUCKETS = parseNumberList_(cfg.CALIBRATION_EDGE_BUCKETS, [0, 0.02, 0.04, 0.06, 0.10]);
+  cfg.CALIBRATION_ALERT_MIN_SAMPLE = Math.max(1, toInt_(cfg.CALIBRATION_ALERT_MIN_SAMPLE, 15));
+  cfg.CALIBRATION_ALERT_BRIER_GAP = Math.max(0, toFloat_(cfg.CALIBRATION_ALERT_BRIER_GAP, 0.010));
 
   cfg.EXT_FEATURES_ENABLE_WEATHER = String(cfg.EXT_FEATURES_ENABLE_WEATHER || "FALSE").toUpperCase() === "TRUE";
   cfg.EXT_FEATURES_ENABLE_BULLPEN = String(cfg.EXT_FEATURES_ENABLE_BULLPEN || "FALSE").toUpperCase() === "TRUE";
