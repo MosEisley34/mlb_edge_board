@@ -7,16 +7,17 @@ function refreshOdds_(cfg) {
     return { sportKeyUsed: chooseSportKey_(cfg), games: 0, updatedAt: isoLocalWithOffset_(new Date()) };
   }
 
-  var lookaheadH = toFloat_(cfg.ODDS_LOOKAHEAD_HOURS, 36);
+  var oddsReq = buildOddsRequestConfig_(cfg);
+  var lookaheadH = oddsReq.lookaheadHours;
   var fromIso = isoUtcNoMs_(new Date());
   var toIso = isoUtcNoMs_(new Date(new Date().getTime() + lookaheadH * 3600 * 1000));
 
   var sportKeyUsed = chooseSportKey_(cfg);
-  var data = fetchOddsData_(apiKey, cfg, sportKeyUsed, fromIso, toIso);
+  var data = fetchOddsData_(apiKey, cfg, sportKeyUsed, fromIso, toIso, oddsReq);
 
   if (cfg.ODDS_FALLBACK_ON_EMPTY === true && data.length === 0 && sportKeyUsed === cfg.ODDS_SPORT_KEY_PRESEASON) {
     log_("INFO", "Odds preseason empty; trying fallback sport key", { from: sportKeyUsed, to: cfg.ODDS_SPORT_KEY_REGULAR });
-    var data2 = fetchOddsData_(apiKey, cfg, cfg.ODDS_SPORT_KEY_REGULAR, fromIso, toIso);
+    var data2 = fetchOddsData_(apiKey, cfg, cfg.ODDS_SPORT_KEY_REGULAR, fromIso, toIso, oddsReq);
     if (data2.length > 0) { data = data2; sportKeyUsed = cfg.ODDS_SPORT_KEY_REGULAR; }
   }
 
@@ -72,32 +73,48 @@ function refreshOdds_(cfg) {
   if (historyRows.length > 0) {
     shOddsHistory.getRange(shOddsHistory.getLastRow() + 1, 1, historyRows.length, historyRows[0].length).setValues(historyRows);
   }
-  log_("INFO", "refreshOdds completed", { sportKeyUsed: sportKeyUsed, games: rows.length, historyRowsAppended: historyRows.length, windowHours: lookaheadH, from: fromIso, to: toIso });
+  log_("INFO", "refreshOdds completed", {
+    sportKeyUsed: sportKeyUsed,
+    games: rows.length,
+    historyRowsAppended: historyRows.length,
+    windowHours: lookaheadH,
+    from: fromIso,
+    to: toIso,
+    oddsUsageProfile: oddsReq.profile,
+    regions: oddsReq.regions,
+    bookmakers: oddsReq.bookmakersCsv || "(all)"
+  });
   return { sportKeyUsed: sportKeyUsed, games: rows.length, updatedAt: nowLocal };
 }
 
-function fetchOddsData_(apiKey, cfg, sportKey, fromIso, toIso) {
-  log_("INFO", "Odds sport key selected", {
+function fetchOddsData_(apiKey, cfg, sportKey, fromIso, toIso, oddsReq) {
+  var req = oddsReq || buildOddsRequestConfig_(cfg);
+  log_("INFO", "Odds request parameters", {
+    oddsUsageProfile: req.profile,
     sportKeyUsed: sportKey,
-    regions: cfg.ODDS_REGIONS,
+    regions: req.regions,
     markets: cfg.ODDS_MARKETS,
     oddsFormat: cfg.ODDS_FORMAT,
     dateFormat: cfg.ODDS_DATE_FORMAT,
     strategy: "best",
     refBookKey: (cfg.ODDS_REF_BOOK || ""),
     commenceTimeFrom: fromIso,
-    commenceTimeTo: toIso
+    commenceTimeTo: toIso,
+    lookaheadHours: req.lookaheadHours,
+    bookmakers: req.bookmakersCsv || "(all)"
   });
 
   var url =
     "https://api.the-odds-api.com/v4/sports/" + encodeURIComponent(sportKey) + "/odds/" +
     "?apiKey=" + encodeURIComponent(apiKey) +
-    "&regions=" + encodeURIComponent(cfg.ODDS_REGIONS) +
+    "&regions=" + encodeURIComponent(req.regions) +
     "&markets=" + encodeURIComponent(cfg.ODDS_MARKETS) +
     "&oddsFormat=" + encodeURIComponent(cfg.ODDS_FORMAT) +
     "&dateFormat=" + encodeURIComponent(cfg.ODDS_DATE_FORMAT) +
     "&commenceTimeFrom=" + encodeURIComponent(fromIso) +
     "&commenceTimeTo=" + encodeURIComponent(toIso);
+
+  if (req.bookmakersCsv) url += "&bookmakers=" + encodeURIComponent(req.bookmakersCsv);
 
   var resp = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
   var http = resp.getResponseCode();
@@ -122,6 +139,28 @@ function fetchOddsData_(apiKey, cfg, sportKey, fromIso, toIso) {
 }
 
 
+
+function buildOddsRequestConfig_(cfg) {
+  var profile = String(cfg.ODDS_USAGE_PROFILE || "NORMAL").toUpperCase();
+  if (profile !== "LOW_CREDIT") profile = "NORMAL";
+
+  var regions = String(cfg.ODDS_REGIONS || "us,us2").trim();
+  var lookaheadHours = toFloat_(cfg.ODDS_LOOKAHEAD_HOURS, 36);
+  var bookmakersCsv = "";
+
+  if (profile === "LOW_CREDIT") {
+    regions = String(cfg.ODDS_LOW_CREDIT_REGIONS || "us").trim() || "us";
+    lookaheadHours = Math.max(1, toFloat_(cfg.ODDS_LOW_CREDIT_LOOKAHEAD_HOURS, 12));
+    bookmakersCsv = String(cfg.ODDS_LOW_CREDIT_BOOKMAKERS || "").trim();
+  }
+
+  return {
+    profile: profile,
+    regions: regions,
+    lookaheadHours: lookaheadHours,
+    bookmakersCsv: bookmakersCsv
+  };
+}
 
 function persistOddsCreditsSnapshot_(remaining) {
   if (!isFinite(Number(remaining))) return;

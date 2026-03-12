@@ -36,3 +36,16 @@ Apps Script loads global functions/variables across files, so order is mostly fo
   - Missing/too-early close values keep close/CLV fields blank and set `close_reason_code`.
   - Optional time trigger: enable `ENABLE_SIGNAL_CLOSE_UPDATER=TRUE` and tune `SIGNAL_CLOSE_UPDATER_MINUTES` / `SIGNAL_CLOSE_PRESTART_MIN`.
 
+## Odds API usage profiles (`ODDS_USAGE_PROFILE`)
+Use `ODDS_USAGE_PROFILE` in `SETTINGS` to switch odds request footprint without editing code.
+
+- `NORMAL` (default): keeps your standard coverage (`ODDS_REGIONS`, `ODDS_LOOKAHEAD_HOURS`, all bookmakers unless otherwise constrained).
+- `LOW_CREDIT`: applies low-credit overrides for a smaller payload/cost profile.
+
+Recommended low-credit settings:
+- `ODDS_USAGE_PROFILE=LOW_CREDIT`
+- `ODDS_LOW_CREDIT_REGIONS=us`
+- `ODDS_LOW_CREDIT_LOOKAHEAD_HOURS=12` (or up to `18` if you need a wider window)
+- `ODDS_LOW_CREDIT_BOOKMAKERS=` a curated CSV list (optional), for example `draftkings,fanduel`
+
+Switch back to `ODDS_USAGE_PROFILE=NORMAL` when credits are healthy.
