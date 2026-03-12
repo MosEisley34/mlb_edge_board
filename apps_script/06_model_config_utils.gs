@@ -805,12 +805,29 @@ function maybeNotifyDiscord_(cfg, oddsId, dateKey, payload) {
   }
 
   if (!reason) {
-    if (tierChanged) reason = "tier_upgrade";
+    if (tierChanged) reason = "tier_change";
     else if (hasPriorMetrics && edgeMovePct >= minEdgeMovePct) reason = "edge_delta";
     else reason = "cooldown_expired";
   }
 
   var signalId = Utilities.getUuid();
+
+  var signalLogPayload = {
+    signal_id: signalId,
+    sent_at_local: isoLocalWithOffset_(new Date()),
+    odds_game_id: String(oddsId || ""),
+    mlb_gamePk: String(payload.mlbGamePk || ""),
+    pick_side: String(payload.bet.side || ""),
+    pick_team: String(pickTeam || ""),
+    price_at_signal: isFinite(price) ? round_(price, 4) : "",
+    implied_at_signal: isFinite(implied) ? round_(implied, 6) : "",
+    model_prob_at_signal: isFinite(modelP) ? round_(modelP, 6) : "",
+    edge_at_signal: isFinite(edge) ? round_(edge, 6) : "",
+    tier: String(payload.bet.tier || ""),
+    confidence: isFinite(payload.conf) ? round_(payload.conf, 2) : "",
+    units_suggested: isFinite(payload.units) ? round_(payload.units, 2) : "",
+    source_reason: String(reason || "")
+  };
 
   var msg =
     "📈 **" + payload.mode + " MODEL SIGNAL — " + payload.bet.tier + "**\n" +
@@ -847,6 +864,7 @@ function maybeNotifyDiscord_(cfg, oddsId, dateKey, payload) {
   var res = sendDiscordByMode_(deliveryMode, payloadObj);
   if (res.http >= 200 && res.http < 300) {
     var messageId = discordMessageIdFromBody_(res.body);
+    appendSignalLogRow_(signalLogPayload);
     props.setProperty(key, JSON.stringify({
       sig: sig,
       dateKey: dateKey,
@@ -869,6 +887,15 @@ function maybeNotifyDiscord_(cfg, oddsId, dateKey, payload) {
     signalId: signalId
   });
   return false;
+}
+
+function appendSignalLogRow_(rowObj) {
+  var ss = SpreadsheetApp.getActive();
+  var sh = ss.getSheetByName(SH.SIGNAL_LOG) || getOrCreateSheet_(ss, SH.SIGNAL_LOG);
+  ensureSignalLogHeader_(sh);
+  var header = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0];
+  var row = rowObjectToHeader_(rowObj || {}, header);
+  sh.appendRow(row);
 }
 
 function parseNotifyState_(raw) {
