@@ -574,7 +574,7 @@ function sendDiscordActionButtonsTest() {
       DISCORD_MESSAGE_DIVIDER + "\n" +
       "Use this test message to validate Discord buttons and Web App routing.\n" +
       DISCORD_MESSAGE_DIVIDER + "\n" +
-      "This does **not** create or update betting logs.",
+      "This does **not** create or update legacy tracking logs.",
     components: [{
       type: 1,
       components: [

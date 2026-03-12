@@ -15,8 +15,10 @@ function setup() {
   getOrCreateSheet_(ss, SH.EDGE_BOARD);
   getOrCreateSheet_(ss, SH.PLAYER_MAP);
   getOrCreateSheet_(ss, SH.NOTIFY_STATE);
-  getOrCreateSheet_(ss, SH.BET_LOG);
-  getOrCreateSheet_(ss, SH.BET_EVENTS);
+  if (isBetTrackingEnabled_()) {
+    getOrCreateSheet_(ss, BET_TRACKING_SHEETS.BET_LOG);
+    getOrCreateSheet_(ss, BET_TRACKING_SHEETS.BET_EVENTS);
+  }
   getOrCreateSheet_(ss, SH.CALIBRATION_SNAPSHOTS);
   getOrCreateSheet_(ss, SH.CALIBRATION_REPORT);
 
@@ -29,8 +31,10 @@ function setup() {
   ensureEdgeHeader_(ss.getSheetByName(SH.EDGE_BOARD));
   ensurePlayerMapHeader_(ss.getSheetByName(SH.PLAYER_MAP));
   ensureNotifyStateHeader_(ss.getSheetByName(SH.NOTIFY_STATE));
-  ensureBetLogHeader_(ss.getSheetByName(SH.BET_LOG));
-  ensureBetEventsHeader_(ss.getSheetByName(SH.BET_EVENTS));
+  if (isBetTrackingEnabled_()) {
+    ensureBetLogHeader_(ss.getSheetByName(BET_TRACKING_SHEETS.BET_LOG));
+    ensureBetEventsHeader_(ss.getSheetByName(BET_TRACKING_SHEETS.BET_EVENTS));
+  }
   ensureCalibrationSnapshotsHeader_(ss.getSheetByName(SH.CALIBRATION_SNAPSHOTS));
   ensureCalibrationReportHeader_(ss.getSheetByName(SH.CALIBRATION_REPORT));
 
@@ -45,8 +49,12 @@ function resetWorkbook() {
   var names = [
     SH.LOG, SH.ODDS_RAW, SH.MLB_SCHEDULE, SH.MLB_LINEUPS,
     SH.BATTER_PROJ, SH.PITCHER_PROJ, SH.EDGE_BOARD, SH.PLAYER_MAP, SH.NOTIFY_STATE,
-    SH.BET_LOG, SH.BET_EVENTS, SH.CALIBRATION_SNAPSHOTS, SH.CALIBRATION_REPORT
+    SH.CALIBRATION_SNAPSHOTS, SH.CALIBRATION_REPORT
   ];
+  if (isBetTrackingEnabled_()) {
+    names.push(BET_TRACKING_SHEETS.BET_LOG);
+    names.push(BET_TRACKING_SHEETS.BET_EVENTS);
+  }
   for (var i = 0; i < names.length; i++) {
     var sh = ss.getSheetByName(names[i]);
     if (sh) ss.deleteSheet(sh);
@@ -61,8 +69,10 @@ function resetWorkbook() {
   getOrCreateSheet_(ss, SH.EDGE_BOARD);
   getOrCreateSheet_(ss, SH.PLAYER_MAP);
   getOrCreateSheet_(ss, SH.NOTIFY_STATE);
-  getOrCreateSheet_(ss, SH.BET_LOG);
-  getOrCreateSheet_(ss, SH.BET_EVENTS);
+  if (isBetTrackingEnabled_()) {
+    getOrCreateSheet_(ss, BET_TRACKING_SHEETS.BET_LOG);
+    getOrCreateSheet_(ss, BET_TRACKING_SHEETS.BET_EVENTS);
+  }
   getOrCreateSheet_(ss, SH.CALIBRATION_SNAPSHOTS);
   getOrCreateSheet_(ss, SH.CALIBRATION_REPORT);
 
@@ -75,8 +85,10 @@ function resetWorkbook() {
   ensureEdgeHeader_(ss.getSheetByName(SH.EDGE_BOARD));
   ensurePlayerMapHeader_(ss.getSheetByName(SH.PLAYER_MAP));
   ensureNotifyStateHeader_(ss.getSheetByName(SH.NOTIFY_STATE));
-  ensureBetLogHeader_(ss.getSheetByName(SH.BET_LOG));
-  ensureBetEventsHeader_(ss.getSheetByName(SH.BET_EVENTS));
+  if (isBetTrackingEnabled_()) {
+    ensureBetLogHeader_(ss.getSheetByName(BET_TRACKING_SHEETS.BET_LOG));
+    ensureBetEventsHeader_(ss.getSheetByName(BET_TRACKING_SHEETS.BET_EVENTS));
+  }
   ensureCalibrationSnapshotsHeader_(ss.getSheetByName(SH.CALIBRATION_SNAPSHOTS));
   ensureCalibrationReportHeader_(ss.getSheetByName(SH.CALIBRATION_REPORT));
 
@@ -102,6 +114,11 @@ function resetWorkbook() {
   props.deleteProperty(PROP.DISCORD_CHANNEL_ID);
 
   log_("INFO", "Workbook reset completed (tabs deleted + recreated)", {});
+}
+
+function isBetTrackingEnabled_() {
+  var cfg = getConfig_();
+  return !!cfg.ENABLE_BET_TRACKING;
 }
 
 /* ===================== HEADERS ===================== */

@@ -102,7 +102,9 @@ function persistCalibrationSnapshots_(cfg, edgeRows, schedByPk, externalFeatureC
 
 function applyResultToSnapshot_(snapshotObj) {
   var ss = SpreadsheetApp.getActive();
-  var shBet = ss.getSheetByName(SH.BET_LOG);
+  var cfg = getConfig_();
+  if (!cfg.ENABLE_BET_TRACKING) return;
+  var shBet = ss.getSheetByName(BET_TRACKING_SHEETS.BET_LOG);
   if (!shBet || shBet.getLastRow() < 2) return;
 
   var rows = readSheetAsObjects_(shBet);

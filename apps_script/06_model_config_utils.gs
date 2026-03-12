@@ -810,23 +810,7 @@ function maybeNotifyDiscord_(cfg, oddsId, dateKey, payload) {
     else reason = "cooldown_expired";
   }
 
-  var betId = createPendingBet_(cfg, {
-    oddsGameId: oddsId,
-    mlbGamePk: payload.mlbGamePk || "",
-    awayTeam: payload.awayTeam,
-    homeTeam: payload.homeTeam,
-    pickSide: payload.bet.side,
-    pickTeam: pickTeam,
-    commenceLocal: payload.commenceLocal,
-    pickPrice: price,
-    modelProb: modelP,
-    implied: implied,
-    noVigImplied: isFinite(noVig) ? noVig : "",
-    edge: payload.bet.edge,
-    confidence: payload.conf,
-    unitsSuggested: payload.units,
-    mode: payload.mode
-  });
+  var signalId = Utilities.getUuid();
 
   var msg =
     "📈 **" + payload.mode + " MODEL SIGNAL — " + payload.bet.tier + "**\n" +
@@ -838,13 +822,13 @@ function maybeNotifyDiscord_(cfg, oddsId, dateKey, payload) {
     (isFinite(noVig) ? " | **No-vig:** " + (noVig * 100).toFixed(1) + "%" : "") + "\n" +
     "📈 **Edge:** " + (payload.bet.edge * 100).toFixed(2) + "% | **Confidence:** " + Math.round(payload.conf) + "/100\n" +
     "📚 Coverage: " + payload.coverageAway + " vs " + payload.coverageHome + " | ⚾ Pitchers: " + payload.pitchers + "\n" +
-    "🆔 BetId: `" + betId + "` | OddsId: `" + oddsId + "`";
+    "🆔 SignalId: `" + signalId + "` | OddsId: `" + oddsId + "`";
 
-  var isUpdate = isSameDaySignal && !!prevState.lastBetId;
+  var isUpdate = isSameDaySignal && !!prevState.lastSignalId;
   if (isUpdate) {
     msg =
       "🔁 SIGNAL UPDATE\n" +
-      "Prior BetId: `" + prevState.lastBetId + "` → New BetId: `" + betId + "`\n" +
+      "Prior SignalId: `" + prevState.lastSignalId + "` → New SignalId: `" + signalId + "`\n" +
       "Reason: `" + reason + "`\n" +
       "Tier: **" + (prevState.lastTier || "?") + "** → **" + String(payload.bet.tier || "") + "**\n" +
       "Odds: **" + (isFinite(prevState.lastPrice) ? prevState.lastPrice : "?") + "** → **" + (isFinite(price) ? price : "?") + "**\n" +
@@ -856,14 +840,7 @@ function maybeNotifyDiscord_(cfg, oddsId, dateKey, payload) {
   var includesComponents = false;
   var deliveryMode = discordDeliveryMode_(cfg, { allowWebhook: true });
   if (deliveryMode.mode === "missing") {
-    appendBetEvent_(betId, "DISCORD_FAILED", "PENDING", "PENDING", {
-      http: 0,
-      body: "missing Discord delivery config",
-      includesComponents: includesComponents,
-      deliveryMode: deliveryMode.mode,
-      update_reason: reason || ""
-    });
-    log_("WARN", "Discord notify skipped: missing delivery config", { includesComponents: includesComponents, deliveryMode: deliveryMode.mode });
+    log_("WARN", "Discord notify skipped: missing delivery config", { includesComponents: includesComponents, deliveryMode: deliveryMode.mode, signalId: signalId });
     return false;
   }
 
@@ -878,32 +855,18 @@ function maybeNotifyDiscord_(cfg, oddsId, dateKey, payload) {
       lastPrice: isFinite(price) ? round_(price, 4) : "",
       lastEdge: isFinite(edge) ? round_(edge, 6) : "",
       lastTier: String(payload.bet.tier || ""),
-      lastBetId: String(betId || ""),
+      lastSignalId: String(signalId || ""),
       lastDiscordMessageId: String(messageId || "")
     }));
-    appendBetEvent_(betId, isUpdate ? "DISCORD_UPDATE_SENT" : "DISCORD_SENT", "PENDING", "PENDING", {
-      http: res.http,
-      body: String(res.body || "").slice(0, 200),
-      includesComponents: includesComponents,
-      deliveryMode: res.deliveryMode,
-      discord_message_id: String(messageId || ""),
-      update_reason: reason || ""
-    });
     return true;
   }
 
-  appendBetEvent_(betId, "DISCORD_FAILED", "PENDING", "PENDING", {
-    http: res.http,
-    body: String(res.body || "").slice(0, 200),
-    includesComponents: includesComponents,
-    deliveryMode: res.deliveryMode,
-    update_reason: reason || ""
-  });
   log_("WARN", "Discord notify failed", {
     http: res.http,
     body: String(res.body || "").slice(0, 250),
     includesComponents: includesComponents,
-    deliveryMode: res.deliveryMode
+    deliveryMode: res.deliveryMode,
+    signalId: signalId
   });
   return false;
 }
@@ -916,7 +879,7 @@ function parseNotifyState_(raw) {
     lastPrice: NaN,
     lastEdge: NaN,
     lastTier: "",
-    lastBetId: "",
+    lastSignalId: "",
     lastDiscordMessageId: ""
   };
   var s = String(raw || "").trim();
@@ -939,7 +902,7 @@ function parseNotifyState_(raw) {
     out.lastPrice = toFloat_(obj.lastPrice, NaN);
     out.lastEdge = toFloat_(obj.lastEdge, NaN);
     out.lastTier = String(obj.lastTier || "");
-    out.lastBetId = String(obj.lastBetId || "");
+    out.lastSignalId = String(obj.lastSignalId || obj.lastBetId || "");
     out.lastDiscordMessageId = String(obj.lastDiscordMessageId || "");
   } catch (e) {
     out.sig = s;
