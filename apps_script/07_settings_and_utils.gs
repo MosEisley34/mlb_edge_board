@@ -105,6 +105,8 @@ function ensureSettings_(sh) {
     ["EXT_FEATURES_PROVIDER_MARKET", "INTERNAL", "Market provider selector"],
     ["EXT_FEATURES_PROVIDER_STATCAST", "INTERNAL", "Statcast provider selector"],
     ["EXT_FEATURES_TTL_WEATHER_MIN", "30", "Cache freshness TTL in minutes for weather source"],
+    ["EXT_FEATURES_WEATHER_CONFIDENCE_MIN", "HIGH", "LOW / MEDIUM / HIGH confidence gate for weather adjustments"],
+    ["EXT_FEATURES_WEATHER_OVERRIDES_JSON", "", "Optional JSON map of forecast phrase overrides for weather severity"],
     ["EXT_FEATURES_TTL_BULLPEN_MIN", "20", "Cache freshness TTL in minutes for bullpen source"],
     ["EXT_FEATURES_TTL_MARKET_MIN", "15", "Cache freshness TTL in minutes for market source"],
     ["EXT_FEATURES_TTL_STATCAST_MIN", "60", "Cache freshness TTL in minutes for statcast source"],
@@ -270,6 +272,9 @@ function getConfig_() {
   cfg.EXT_FEATURES_PROVIDER_MARKET = String(cfg.EXT_FEATURES_PROVIDER_MARKET || "INTERNAL").toUpperCase();
   cfg.EXT_FEATURES_PROVIDER_STATCAST = String(cfg.EXT_FEATURES_PROVIDER_STATCAST || "INTERNAL").toUpperCase();
   cfg.EXT_FEATURES_TTL_WEATHER_MIN = Math.max(5, toInt_(cfg.EXT_FEATURES_TTL_WEATHER_MIN, 30));
+  cfg.EXT_FEATURES_WEATHER_CONFIDENCE_MIN = normalizeWeatherConfidenceSetting_(cfg.EXT_FEATURES_WEATHER_CONFIDENCE_MIN, "HIGH");
+  cfg.EXT_FEATURES_WEATHER_OVERRIDES_JSON = String(cfg.EXT_FEATURES_WEATHER_OVERRIDES_JSON || "").trim();
+  cfg.EXT_FEATURES_WEATHER_OVERRIDES_MAP = parseWeatherOverridesSetting_(cfg.EXT_FEATURES_WEATHER_OVERRIDES_JSON);
   cfg.EXT_FEATURES_TTL_BULLPEN_MIN = Math.max(5, toInt_(cfg.EXT_FEATURES_TTL_BULLPEN_MIN, 20));
   cfg.EXT_FEATURES_TTL_MARKET_MIN = Math.max(5, toInt_(cfg.EXT_FEATURES_TTL_MARKET_MIN, 15));
   cfg.EXT_FEATURES_TTL_STATCAST_MIN = Math.max(5, toInt_(cfg.EXT_FEATURES_TTL_STATCAST_MIN, 60));
@@ -283,6 +288,61 @@ function getConfig_() {
   cfg.EXT_FEATURES_EXPERIMENTAL_DISABLE_MIN = Math.max(15, toInt_(cfg.EXT_FEATURES_EXPERIMENTAL_DISABLE_MIN, 120));
 
   return cfg;
+}
+
+function normalizeWeatherConfidenceSetting_(value, fallback) {
+  var normalized = String(value || fallback || "HIGH").trim().toUpperCase();
+  if (normalized === "MED") normalized = "MEDIUM";
+  if (normalized !== "LOW" && normalized !== "MEDIUM" && normalized !== "HIGH") return String(fallback || "HIGH").toUpperCase();
+  return normalized;
+}
+
+function defaultWeatherOverridesMap_() {
+  return {
+    "thunder": { severity: 0.95, confidence: "HIGH" },
+    "heavy rain": { severity: 0.85, confidence: "HIGH" },
+    "rain": { severity: 0.75, confidence: "MEDIUM" },
+    "showers": { severity: 0.70, confidence: "MEDIUM" },
+    "drizzle": { severity: 0.62, confidence: "MEDIUM" },
+    "fog": { severity: 0.64, confidence: "MEDIUM" },
+    "snow": { severity: 0.90, confidence: "HIGH" }
+  };
+}
+
+function parseWeatherOverridesSetting_(jsonRaw) {
+  var fallback = defaultWeatherOverridesMap_();
+  var txt = String(jsonRaw || "").trim();
+  if (!txt) return fallback;
+  try {
+    var parsed = JSON.parse(txt);
+    if (!parsed || typeof parsed !== "object" || Object.prototype.toString.call(parsed) === "[object Array]") throw new Error("expected_object_map");
+    var out = {};
+    var keys = Object.keys(parsed);
+    for (var i = 0; i < keys.length; i++) {
+      var k = String(keys[i] || "").trim().toLowerCase();
+      if (!k) continue;
+      var raw = parsed[keys[i]];
+      var severity = NaN;
+      var confidence = "HIGH";
+      if (typeof raw === "number") {
+        severity = Number(raw);
+      } else if (raw && typeof raw === "object") {
+        severity = Number(raw.severity);
+        confidence = normalizeWeatherConfidenceSetting_(raw.confidence, "HIGH");
+      }
+      if (!isFinite(severity)) continue;
+      out[k] = {
+        severity: clamp_(0, 1, severity),
+        confidence: confidence
+      };
+    }
+    return Object.keys(out).length ? out : fallback;
+  } catch (e) {
+    log_("WARN", "EXT_FEATURES_WEATHER_OVERRIDES_JSON parse failed; falling back to built-in map", {
+      error: String(e && e.message ? e.message : e || "unknown_error")
+    });
+    return fallback;
+  }
 }
 
 function chooseSportKey_(cfg) {

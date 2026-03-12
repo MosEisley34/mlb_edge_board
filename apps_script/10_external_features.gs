@@ -170,7 +170,7 @@ function fetchExternalFeatureSource_(cfg, source, games) {
 
 function externalFeatureSourceCfg_(cfg, source) {
   var m = {
-    weather: { enabled: !!cfg.EXT_FEATURES_ENABLE_WEATHER, provider: cfg.EXT_FEATURES_PROVIDER_WEATHER, ttlMin: cfg.EXT_FEATURES_TTL_WEATHER_MIN, cacheProp: PROP.EXT_FEATURE_CACHE_WEATHER, experimental: false },
+    weather: { enabled: !!cfg.EXT_FEATURES_ENABLE_WEATHER, provider: cfg.EXT_FEATURES_PROVIDER_WEATHER, ttlMin: cfg.EXT_FEATURES_TTL_WEATHER_MIN, cacheProp: PROP.EXT_FEATURE_CACHE_WEATHER, experimental: false, weatherConfidenceMin: cfg.EXT_FEATURES_WEATHER_CONFIDENCE_MIN, weatherOverridesMap: cfg.EXT_FEATURES_WEATHER_OVERRIDES_MAP },
     bullpen: { enabled: !!cfg.EXT_FEATURES_ENABLE_BULLPEN, provider: cfg.EXT_FEATURES_PROVIDER_BULLPEN, ttlMin: cfg.EXT_FEATURES_TTL_BULLPEN_MIN, cacheProp: PROP.EXT_FEATURE_CACHE_BULLPEN, experimental: false },
     market: { enabled: !!cfg.EXT_FEATURES_ENABLE_MARKET, provider: cfg.EXT_FEATURES_PROVIDER_MARKET, ttlMin: cfg.EXT_FEATURES_TTL_MARKET_MIN, cacheProp: PROP.EXT_FEATURE_CACHE_MARKET, experimental: true },
     statcast: { enabled: !!cfg.EXT_FEATURES_ENABLE_STATCAST, provider: cfg.EXT_FEATURES_PROVIDER_STATCAST, ttlMin: cfg.EXT_FEATURES_TTL_STATCAST_MIN, cacheProp: PROP.EXT_FEATURE_CACHE_STATCAST, experimental: true }
@@ -254,7 +254,7 @@ function buildWeatherExternalFeatureRows_(sourceCfg, games) {
     var g = games[i] || {};
     var gamePk = String(g.mlb_gamePk || "").trim();
     if (!gamePk) continue;
-    var weather = fetchWeatherForGamePk_(gamePk);
+    var weather = fetchWeatherForGamePk_(gamePk, sourceCfg);
     out.push({
       source: sourceCfg.source,
       provider: sourceCfg.provider,
@@ -274,7 +274,7 @@ function buildWeatherExternalFeatureRows_(sourceCfg, games) {
   return out;
 }
 
-function fetchWeatherForGamePk_(gamePk) {
+function fetchWeatherForGamePk_(gamePk, sourceCfg) {
   var gameUrl = "https://statsapi.mlb.com/api/v1.1/game/" + encodeURIComponent(gamePk) + "/feed/live";
   var gameResp = UrlFetchApp.fetch(gameUrl, { muteHttpExceptions: true });
   if (gameResp.getResponseCode() !== 200) throw new Error("weather_game_fetch_http_" + gameResp.getResponseCode());
@@ -307,13 +307,20 @@ function fetchWeatherForGamePk_(gamePk) {
   var tempF = Number(first.temperature);
   if (!isFinite(tempF)) tempF = 70;
   var windMph = parseWindSpeedMph_(first.windSpeed);
-  var severity = scoreWeatherSeverity_(tempF, windMph, String(first.shortForecast || ""));
+  var shortForecast = String(first.shortForecast || "");
+  var overridesMap = sourceCfg && sourceCfg.weatherOverridesMap ? sourceCfg.weatherOverridesMap : defaultWeatherOverridesMap_();
+  var scored = scoreWeatherSeverity_(tempF, windMph, shortForecast, overridesMap);
+  var minConfidence = normalizeWeatherConfidenceSetting_(sourceCfg && sourceCfg.weatherConfidenceMin, "HIGH");
+  var applied = passesWeatherConfidenceGate_(scored.confidence, minConfidence);
   return {
-    runEnvDelta: (severity - 0.5) * 0.08,
-    weatherSeverity: severity,
+    runEnvDelta: applied ? (scored.severity - 0.5) * 0.08 : 0,
+    weatherSeverity: scored.severity,
+    weatherConfidence: scored.confidence,
+    weatherConfidenceGateMin: minConfidence,
+    weatherConfidenceApplied: applied,
     temperatureF: tempF,
     windMph: windMph,
-    shortForecast: String(first.shortForecast || ""),
+    shortForecast: shortForecast,
     forecastStartTime: String(first.startTime || "")
   };
 }
@@ -328,19 +335,61 @@ function parseWindSpeedMph_(windSpeedRaw) {
   return isFinite(lo) ? lo : 0;
 }
 
-function scoreWeatherSeverity_(tempF, windMph, shortForecast) {
+function scoreWeatherSeverity_(tempF, windMph, shortForecast, overridesMap) {
   var tempPenalty = Math.abs(Number(tempF) - 72) / 80;
   if (!isFinite(tempPenalty)) tempPenalty = 0.15;
   var windPenalty = Math.min(1, Number(windMph) / 30);
   if (!isFinite(windPenalty)) windPenalty = 0;
   var desc = String(shortForecast || "").toLowerCase();
   var condPenalty = 0;
-  if (desc.indexOf("thunder") >= 0) condPenalty = 1;
-  else if (desc.indexOf("rain") >= 0 || desc.indexOf("showers") >= 0) condPenalty = 0.7;
-  else if (desc.indexOf("snow") >= 0) condPenalty = 0.9;
-  else if (desc.indexOf("drizzle") >= 0 || desc.indexOf("fog") >= 0) condPenalty = 0.5;
+  var confidence = "LOW";
+  var map = overridesMap && typeof overridesMap === "object" ? overridesMap : defaultWeatherOverridesMap_();
+  var matchedKey = "";
+  var keys = Object.keys(map).sort(function (a, b) { return String(b || "").length - String(a || "").length; });
+  for (var i = 0; i < keys.length; i++) {
+    var key = String(keys[i] || "").toLowerCase();
+    if (!key) continue;
+    if (desc.indexOf(key) >= 0) {
+      matchedKey = key;
+      break;
+    }
+  }
+
+  if (matchedKey) {
+    var override = map[matchedKey] || {};
+    var overrideSeverity = Number(override.severity);
+    var overrideConfidence = normalizeWeatherConfidenceSetting_(override.confidence, "HIGH");
+    if (isFinite(overrideSeverity)) {
+      var severityFromOverride = clamp_(0, 1, overrideSeverity);
+      condPenalty = Math.max(0, Math.min(1, (severityFromOverride - 0.5) / 0.45));
+      confidence = overrideConfidence;
+    }
+  } else if (desc.indexOf("thunder") >= 0) {
+    condPenalty = 1;
+    confidence = "HIGH";
+  } else if (desc.indexOf("snow") >= 0) {
+    condPenalty = 0.9;
+    confidence = "HIGH";
+  } else if (desc.indexOf("rain") >= 0 || desc.indexOf("showers") >= 0) {
+    condPenalty = 0.7;
+    confidence = "MEDIUM";
+  } else if (desc.indexOf("drizzle") >= 0 || desc.indexOf("fog") >= 0) {
+    condPenalty = 0.5;
+    confidence = "MEDIUM";
+  }
+
   var severity = 0.5 + (0.2 * tempPenalty) + (0.35 * windPenalty) + (0.45 * condPenalty);
-  return Math.max(0, Math.min(1, severity));
+  return {
+    severity: Math.max(0, Math.min(1, severity)),
+    confidence: confidence
+  };
+}
+
+function passesWeatherConfidenceGate_(confidence, minConfidence) {
+  var rank = { LOW: 1, MEDIUM: 2, HIGH: 3 };
+  var c = normalizeWeatherConfidenceSetting_(confidence, "LOW");
+  var minC = normalizeWeatherConfidenceSetting_(minConfidence, "HIGH");
+  return (rank[c] || 0) >= (rank[minC] || 3);
 }
 
 function buildBullpenExternalFeatureRows_(sourceCfg, games) {
