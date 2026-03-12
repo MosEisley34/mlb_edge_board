@@ -186,9 +186,33 @@ function ensureSignalLogHeader_(sh) {
   setHeader_(sh, [
     "signal_id","sent_at_local","odds_game_id","mlb_gamePk",
     "pick_side","pick_team",
+    "open_price_pick","open_implied_pick",
+    "delta_open_to_signal_price","delta_open_to_signal_implied",
+    "open_reason_code",
     "price_at_signal","implied_at_signal","model_prob_at_signal","edge_at_signal",
+    "close_price_pick","close_implied_pick",
+    "delta_signal_to_close_price","delta_signal_to_close_implied",
+    "close_reason_code",
     "tier","confidence","units_suggested","source_reason"
   ]);
+  applySignalLogColumnNotes_(sh);
+}
+
+function applySignalLogColumnNotes_(sh) {
+  if (!sh || sh.getLastRow() < 1 || sh.getLastColumn() < 1) return;
+  var header = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0];
+  var notesByCol = {
+    "delta_open_to_signal_price": "Opening Drift (Open→Signal): price_at_signal - open_price_pick",
+    "delta_open_to_signal_implied": "Opening Drift (Open→Signal): implied_at_signal - open_implied_pick",
+    "delta_signal_to_close_price": "CLV (Signal→Close): close_price_pick - price_at_signal",
+    "delta_signal_to_close_implied": "CLV (Signal→Close): close_implied_pick - implied_at_signal",
+    "open_reason_code": "Populated only when opening metrics are unavailable.",
+    "close_reason_code": "Populated only when close metrics are unavailable."
+  };
+  for (var i = 0; i < header.length; i++) {
+    var key = String(header[i] || "");
+    if (notesByCol[key]) sh.getRange(1, i + 1).setNote(notesByCol[key]);
+  }
 }
 function ensureBetLogHeader_(sh) {
   setHeader_(sh, [

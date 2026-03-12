@@ -23,3 +23,16 @@ Apps Script loads global functions/variables across files, so order is mostly fo
   - run `setup()` once,
   - verify settings values,
   - run `installTriggers()`.
+
+## SIGNAL_LOG drift metrics
+- **Opening Drift** means **Open→Signal** and is tracked by:
+  - `open_price_pick`, `open_implied_pick`
+  - `delta_open_to_signal_price`, `delta_open_to_signal_implied`
+- **CLV** means **Signal→Close** and is tracked by:
+  - `close_price_pick`, `close_implied_pick`
+  - `delta_signal_to_close_price`, `delta_signal_to_close_implied`
+- Guardrails:
+  - Missing opening values keep open/drift fields blank and set `open_reason_code`.
+  - Missing/too-early close values keep close/CLV fields blank and set `close_reason_code`.
+  - Optional time trigger: enable `ENABLE_SIGNAL_CLOSE_UPDATER=TRUE` and tune `SIGNAL_CLOSE_UPDATER_MINUTES` / `SIGNAL_CLOSE_PRESTART_MIN`.
+
