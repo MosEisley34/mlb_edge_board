@@ -72,6 +72,7 @@ function refreshOdds_(cfg) {
   replaceSheetBody_(shOdds, rows);
   if (historyRows.length > 0) {
     shOddsHistory.getRange(shOddsHistory.getLastRow() + 1, 1, historyRows.length, historyRows[0].length).setValues(historyRows);
+    updateOddsHistoryIndexIncremental_(historyRows, cfg.SIGNAL_CLOSE_PRESTART_MIN);
   }
   log_("INFO", "refreshOdds completed", {
     sportKeyUsed: sportKeyUsed,
