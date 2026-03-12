@@ -1,0 +1,51 @@
+[
+  {
+    "gamePk": 1,
+    "venueName": "Camelback Ranch",
+    "geoConfidence": "HIGH",
+    "geoReason": "static_override_preseason_park",
+    "geoVenueName": "Camelback Ranch",
+    "lat": 33.513,
+    "lon": -112.295,
+    "geoOverrideApplied": true
+  },
+  {
+    "gamePk": 2,
+    "venueName": "CACTI Park of the Palm Beaches",
+    "geoConfidence": "HIGH",
+    "geoReason": "static_override_preseason_park",
+    "geoVenueName": "CACTI Park of the Palm Beaches",
+    "lat": 26.7845,
+    "lon": -80.1002,
+    "geoOverrideApplied": true
+  },
+  {
+    "gamePk": 3,
+    "venueName": "Publix Field at Joker Marchant Stadium",
+    "geoConfidence": "HIGH",
+    "geoReason": "static_override_preseason_park",
+    "geoVenueName": "Publix Field at Joker Marchant Stadium",
+    "lat": 28.0623,
+    "lon": -81.9496,
+    "geoOverrideApplied": true
+  },
+  {
+    "gamePk": 4,
+    "venueName": "Lee Health Sports Complex",
+    "geoConfidence": "HIGH",
+    "geoReason": "static_override_preseason_park",
+    "geoVenueName": "Lee Health Sports Complex",
+    "lat": 26.5365,
+    "lon": -81.7892,
+    "geoOverrideApplied": true
+  },
+  {
+    "gamePk": 5,
+    "venueName": "Fenway Park",
+    "geoConfidence": "HIGH",
+    "geoReason": "exact_match",
+    "geoVenueName": "Fenway Park",
+    "lat": 42.3467,
+    "lon": -71.0972
+  }
+]
