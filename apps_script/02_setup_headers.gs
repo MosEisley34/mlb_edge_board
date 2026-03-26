@@ -218,6 +218,8 @@ function ensureSignalLogHeader_(sh) {
     "delta_signal_to_close_price","delta_signal_to_close_implied",
     "close_reason_code",
     "tier","confidence","units_suggested","source_reason",
+    "unit_mxn","model_risk_mxn","model_to_win_mxn","placed_risk_mxn","placed_to_win_mxn",
+    "sizing_mode","min_bet_mxn","min_applies_to","min_applied","sizing_note",
     "delivery_status","delivery_reason_code","delivery_http","delivery_mode","delivery_error_preview","discord_message_id"
   ]);
   applySignalLogColumnNotes_(sh);
