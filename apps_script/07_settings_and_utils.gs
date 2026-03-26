@@ -96,9 +96,11 @@ function ensureSettings_(sh) {
     ["SIGNAL_CLOSE_UPDATER_MINUTES", "30", "Cadence in minutes for SIGNAL_LOG close/CLV updater trigger"],
     ["SIGNAL_CLOSE_PRESTART_MIN", "15", "Allow close stamping starting this many minutes before first pitch"],
     ["BANKROLL_UNIT_MXN", "100", "Value of 1.00u in MXN"],
+    ["BET_BUCKET_MXN", "20", "Bet sizing bucket in MXN"],
+    ["BET_BUCKET_ROUNDING", "CEIL", "CEIL / NEAREST / FLOOR"],
+    ["BET_SIZING_MODE", "STAKE", "STAKE or TO_WIN; interpretation of unit sizing"],
     ["BET_MIN_MXN", "20", "Sportsbook minimum stake/to-win amount in MXN"],
     ["BET_MIN_APPLIES_TO", "STAKE_OR_TO_WIN", "STAKE / TO_WIN / STAKE_OR_TO_WIN"],
-    ["BET_SIZING_MODE", "RISK", "RISK or TO_WIN; interpretation of unit sizing"],
     ["BET_ROUND_TO_MXN", "1", "Rounding increment in MXN (e.g., 1 or 5)"],
     ["BET_ENFORCE_MIN", "TRUE", "TRUE/FALSE: force min and annotate inflation vs model size"],
 
@@ -270,13 +272,19 @@ function getConfig_() {
   cfg.SIGNAL_CLOSE_UPDATER_MINUTES = normalizePipelineTriggerCadenceMinutes_(cfg.SIGNAL_CLOSE_UPDATER_MINUTES_REQUESTED);
   cfg.SIGNAL_CLOSE_PRESTART_MIN = Math.max(0, toInt_(cfg.SIGNAL_CLOSE_PRESTART_MIN, 15));
   cfg.BANKROLL_UNIT_MXN = Math.max(1, toFloat_(cfg.BANKROLL_UNIT_MXN, 100));
+  cfg.BET_BUCKET_MXN = Math.max(1, toFloat_(cfg.BET_BUCKET_MXN, 20));
+  cfg.BET_BUCKET_ROUNDING = String(cfg.BET_BUCKET_ROUNDING || "CEIL").trim().toUpperCase();
+  if (cfg.BET_BUCKET_ROUNDING !== "CEIL" && cfg.BET_BUCKET_ROUNDING !== "NEAREST" && cfg.BET_BUCKET_ROUNDING !== "FLOOR") {
+    cfg.BET_BUCKET_ROUNDING = "CEIL";
+  }
   cfg.BET_MIN_MXN = Math.max(0, toFloat_(cfg.BET_MIN_MXN, 20));
   cfg.BET_MIN_APPLIES_TO = String(cfg.BET_MIN_APPLIES_TO || "STAKE_OR_TO_WIN").trim().toUpperCase();
   if (cfg.BET_MIN_APPLIES_TO !== "STAKE" && cfg.BET_MIN_APPLIES_TO !== "TO_WIN" && cfg.BET_MIN_APPLIES_TO !== "STAKE_OR_TO_WIN") {
     cfg.BET_MIN_APPLIES_TO = "STAKE_OR_TO_WIN";
   }
-  cfg.BET_SIZING_MODE = String(cfg.BET_SIZING_MODE || "RISK").trim().toUpperCase();
-  if (cfg.BET_SIZING_MODE !== "RISK" && cfg.BET_SIZING_MODE !== "TO_WIN") cfg.BET_SIZING_MODE = "RISK";
+  cfg.BET_SIZING_MODE = String(cfg.BET_SIZING_MODE || "STAKE").trim().toUpperCase();
+  if (cfg.BET_SIZING_MODE === "RISK") cfg.BET_SIZING_MODE = "STAKE";
+  if (cfg.BET_SIZING_MODE !== "STAKE" && cfg.BET_SIZING_MODE !== "TO_WIN") cfg.BET_SIZING_MODE = "STAKE";
   cfg.BET_ROUND_TO_MXN = Math.max(1, Math.floor(toFloat_(cfg.BET_ROUND_TO_MXN, 1)));
   cfg.BET_ENFORCE_MIN = String(cfg.BET_ENFORCE_MIN || "TRUE").toUpperCase() === "TRUE";
   cfg.CALIBRATION_WINDOW_DAYS = Math.max(7, toInt_(cfg.CALIBRATION_WINDOW_DAYS, 30));
