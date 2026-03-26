@@ -207,7 +207,7 @@ function ensureEdgeHeader_(sh) {
 function ensurePlayerMapHeader_(sh) { setHeader_(sh, ["name_variant","canonical_name","mlb_id","razz_id","notes","updated_at_local"]); }
 function ensureNotifyStateHeader_(sh) { setHeader_(sh, ["date_key","plays","units","last_updated_local"]); }
 function ensureSignalLogHeader_(sh) {
-  setHeader_(sh, [
+  var desired = [
     "signal_id","sent_at_local","odds_game_id","mlb_gamePk",
     "pick_side","pick_team",
     "open_price_pick","open_implied_pick",
@@ -218,10 +218,43 @@ function ensureSignalLogHeader_(sh) {
     "delta_signal_to_close_price","delta_signal_to_close_implied",
     "close_reason_code",
     "tier","confidence","units_suggested","source_reason",
-    "unit_mxn","model_risk_mxn","model_to_win_mxn","placed_risk_mxn","placed_to_win_mxn",
-    "sizing_mode","min_bet_mxn","min_applies_to","min_applied","sizing_note",
+    "unit_mxn",
+    "raw_stake_mxn","raw_to_win_mxn",
+    "recommended_stake_mxn","recommended_to_win_mxn",
+    "bucket_mxn","bucket_rounding",
+    "min_bet_mxn","min_applied",
+    "sizing_mode","sizing_note",
+    "model_risk_mxn","model_to_win_mxn","placed_risk_mxn","placed_to_win_mxn",
+    "min_applies_to",
     "delivery_status","delivery_reason_code","delivery_http","delivery_mode","delivery_error_preview","discord_message_id"
-  ]);
+  ];
+
+  if (!sh) return;
+  var lastRow = sh.getLastRow();
+  var lastCol = sh.getLastColumn();
+  if (lastRow < 1 || lastCol < 1) {
+    sh.getRange(1, 1, 1, desired.length).setValues([desired]);
+    sh.setFrozenRows(1);
+    applySignalLogColumnNotes_(sh);
+    return;
+  }
+
+  var existing = sh.getRange(1, 1, 1, lastCol).getValues()[0].map(function (x) { return String(x || "").trim(); });
+  var existingMap = {};
+  for (var i = 0; i < existing.length; i++) {
+    var key = existing[i];
+    if (key && existingMap[key] === undefined) existingMap[key] = i;
+  }
+
+  var missing = [];
+  for (var d = 0; d < desired.length; d++) {
+    if (existingMap[desired[d]] === undefined) missing.push(desired[d]);
+  }
+
+  if (missing.length) {
+    sh.getRange(1, existing.length + 1, 1, missing.length).setValues([missing]);
+  }
+  sh.setFrozenRows(1);
   applySignalLogColumnNotes_(sh);
 }
 
