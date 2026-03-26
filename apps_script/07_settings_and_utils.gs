@@ -6,6 +6,7 @@ function ensureSettings_(sh) {
     ["MODE", "PRESEASON", "PRESEASON or REGULAR"],
     ["ACTIVE_START", "09:00", "Local time window start (HH:MM)"],
     ["ACTIVE_END", "23:30", "Local time window end (HH:MM)"],
+    ["RUN_ID_TZ_OFFSET", "-07:00", "UTC offset for run-id timestamp (e.g. -07:00, -7, +5.5)"],
 
     ["ODDS_API_KEY", "", "TheOddsAPI key"],
     ["DISCORD_WEBHOOK", "", "Discord webhook URL (plain text notices)"],
@@ -180,6 +181,7 @@ function getConfig_() {
   cfg.MODE = String(cfg.MODE || "PRESEASON").toUpperCase();
   cfg.ACTIVE_START = cfg.ACTIVE_START || "09:00";
   cfg.ACTIVE_END = cfg.ACTIVE_END || "23:30";
+  cfg.RUN_ID_TZ_OFFSET = normalizeUtcOffsetSetting_(cfg.RUN_ID_TZ_OFFSET, "-07:00");
   cfg.ODDS_API_KEY = String(cfg.ODDS_API_KEY || "").trim();
   cfg.DISCORD_WEBHOOK = String(cfg.DISCORD_WEBHOOK || "").trim();
   cfg.DISCORD_BOT_TOKEN = String(cfg.DISCORD_BOT_TOKEN || "").trim();
@@ -308,6 +310,62 @@ function getConfig_() {
   cfg.EXT_FEATURES_EXPERIMENTAL_DISABLE_MIN = Math.max(15, toInt_(cfg.EXT_FEATURES_EXPERIMENTAL_DISABLE_MIN, 120));
 
   return cfg;
+}
+
+function normalizeUtcOffsetSetting_(value, fallbackValue) {
+  var minutes = parseUtcOffsetMinutes_(value);
+  if (minutes === null) minutes = parseUtcOffsetMinutes_(fallbackValue);
+  if (minutes === null) minutes = 0;
+  return formatUtcOffsetMinutes_(minutes);
+}
+
+function parseUtcOffsetMinutes_(value) {
+  if (value === null || value === undefined || value === "") return null;
+
+  if (typeof value === "number") {
+    if (!isFinite(value)) return null;
+    return normalizeUtcOffsetMinutes_(Math.round(value * 60));
+  }
+
+  var s = String(value).trim();
+  if (!s) return null;
+
+  var colon = s.match(/^([+-])?\s*(\d{1,2}):(\d{2})$/);
+  if (colon) {
+    var signColon = (colon[1] === "-") ? -1 : 1;
+    var hh = Number(colon[2]);
+    var mm = Number(colon[3]);
+    if (!isFinite(hh) || !isFinite(mm) || mm >= 60) return null;
+    return normalizeUtcOffsetMinutes_(signColon * (hh * 60 + mm));
+  }
+
+  var hourLike = s.match(/^([+-])?\s*(\d+(?:\.\d+)?)$/);
+  if (hourLike) {
+    var signHours = (hourLike[1] === "-") ? -1 : 1;
+    var hourNum = Number(hourLike[2]);
+    if (!isFinite(hourNum)) return null;
+    return normalizeUtcOffsetMinutes_(Math.round(signHours * hourNum * 60));
+  }
+
+  return null;
+}
+
+function normalizeUtcOffsetMinutes_(minutesRaw) {
+  var minutes = Number(minutesRaw);
+  if (!isFinite(minutes)) return null;
+  var rounded = Math.round(minutes);
+  var maxMinutes = 14 * 60;
+  if (Math.abs(rounded) > maxMinutes) return null;
+  return rounded;
+}
+
+function formatUtcOffsetMinutes_(minutes) {
+  var total = Math.round(Number(minutes) || 0);
+  var sign = total < 0 ? "-" : "+";
+  var abs = Math.abs(total);
+  var hh = Math.floor(abs / 60);
+  var mm = abs % 60;
+  return sign + pad2_(hh) + ":" + pad2_(mm);
 }
 
 function normalizeWeatherConfidenceSetting_(value, fallback) {
