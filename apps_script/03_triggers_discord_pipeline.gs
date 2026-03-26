@@ -1142,7 +1142,7 @@ function maybeSendOddsFetchBlockerAlert_(cfg, blockState, props) {
 
 function runPipeline(opts) {
   var options = opts || {};
-  var runId = buildPipelineRunId_();
+  var runId = buildPipelineRunId_(options.cfgOverride);
   var lock = null;
   var hasLock = false;
   var runSummary = {
@@ -1555,14 +1555,38 @@ function runPipeline(opts) {
 
 
 
-function buildPipelineRunId_() {
-  var now = new Date();
-  var timestamp = Utilities.formatDate(now, "UTC", "yyyyMMdd'T'HHmmss");
+function buildPipelineRunId_(cfgOverride) {
+  var cfg = cfgOverride || null;
+  var runIdOffsetMinutes = parseUtcOffsetMinutes_(cfg ? cfg.RUN_ID_TZ_OFFSET : null);
+  var offsetSource = "settings";
+
+  // Fallback order for run-id timestamp offset: SETTINGS.RUN_ID_TZ_OFFSET -> TZ_OFFSET constant -> UTC (+00:00).
+  if (runIdOffsetMinutes === null) {
+    offsetSource = "tz_offset_constant";
+    runIdOffsetMinutes = parseUtcOffsetMinutes_(TZ_OFFSET);
+  }
+  if (runIdOffsetMinutes === null) {
+    offsetSource = "utc";
+    runIdOffsetMinutes = 0;
+  }
+
+  var nowUtcMs = Date.now();
+  var runIdClockMs = nowUtcMs + (runIdOffsetMinutes * 60000);
+  var timestamp = Utilities.formatDate(new Date(runIdClockMs), "UTC", "yyyyMMdd'T'HHmmss");
   var uuidHex = String(Utilities.getUuid() || "").toLowerCase().replace(/-/g, "");
   var suffix = uuidHex.slice(0, 8);
 
   if (!/^[0-9a-f]{8}$/.test(suffix)) {
     suffix = shortHash16_(timestamp + "|" + String(Math.random())).slice(0, 8);
+  }
+
+  if (offsetSource !== "settings") {
+    log_("WARN", "RUN_ID_TZ_OFFSET parse failed; fallback applied for run-id timestamp", {
+      runIdOffsetSource: offsetSource,
+      runIdTzOffsetRaw: cfg ? cfg.RUN_ID_TZ_OFFSET : "",
+      tzOffsetConstant: TZ_OFFSET,
+      appliedRunIdOffset: formatUtcOffsetMinutes_(runIdOffsetMinutes)
+    });
   }
 
   return timestamp + "_" + suffix;
