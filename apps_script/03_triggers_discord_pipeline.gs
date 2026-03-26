@@ -1142,7 +1142,7 @@ function maybeSendOddsFetchBlockerAlert_(cfg, blockState, props) {
 
 function runPipeline(opts) {
   var options = opts || {};
-  var runId = [String(Date.now()), Math.floor(Math.random() * 1000000)].join("-");
+  var runId = buildPipelineRunId_();
   var lock = null;
   var hasLock = false;
   var runSummary = {
@@ -1553,6 +1553,20 @@ function runPipeline(opts) {
 }
 
 
+
+
+function buildPipelineRunId_() {
+  var now = new Date();
+  var timestamp = Utilities.formatDate(now, "UTC", "yyyyMMdd'T'HHmmss");
+  var uuidHex = String(Utilities.getUuid() || "").toLowerCase().replace(/-/g, "");
+  var suffix = uuidHex.slice(0, 8);
+
+  if (!/^[0-9a-f]{8}$/.test(suffix)) {
+    suffix = shortHash16_(timestamp + "|" + String(Math.random())).slice(0, 8);
+  }
+
+  return timestamp + "_" + suffix;
+}
 
 
 function canonicalJsonForSignature_(value) {
