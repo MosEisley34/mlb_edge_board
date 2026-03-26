@@ -751,6 +751,117 @@ function computeUnits_(unitsCfg, tier, confidence) {
   return Math.round(u * 100) / 100;
 }
 
+function buildBetSizingPlan_(units, decimalOdds, cfg) {
+  var unitMxn = Math.max(0, toFloat_(cfg.BANKROLL_UNIT_MXN, 100));
+  var mode = String(cfg.BET_SIZING_MODE || "RISK").toUpperCase();
+  if (mode !== "RISK" && mode !== "TO_WIN") mode = "RISK";
+
+  var minMxn = Math.max(0, toFloat_(cfg.BET_MIN_MXN, 20));
+  var minAppliesTo = String(cfg.BET_MIN_APPLIES_TO || "STAKE_OR_TO_WIN").toUpperCase();
+  if (minAppliesTo === "EITHER") minAppliesTo = "STAKE_OR_TO_WIN";
+  if (minAppliesTo !== "STAKE" && minAppliesTo !== "TO_WIN" && minAppliesTo !== "STAKE_OR_TO_WIN") minAppliesTo = "STAKE_OR_TO_WIN";
+
+  var roundTo = Math.max(1, Math.floor(toFloat_(cfg.BET_ROUND_TO_MXN, 1)));
+  var stakeToWinMult = Number(decimalOdds) - 1;
+  var validOdds = isFinite(stakeToWinMult) && stakeToWinMult > 0;
+
+  var modelRisk = Math.max(0, Number(units) * unitMxn);
+  var modelToWin = validOdds ? (modelRisk * stakeToWinMult) : 0;
+  var placedRisk = modelRisk;
+  var placedToWin = modelToWin;
+  var noteParts = [];
+  var minApplied = false;
+
+  if (mode === "TO_WIN") {
+    placedToWin = Math.max(0, Number(units) * unitMxn);
+    if (validOdds) {
+      placedRisk = placedToWin / stakeToWinMult;
+    } else {
+      placedRisk = placedToWin;
+      noteParts.push("invalid_odds_to_win_fallback_risk_equals_to_win");
+    }
+  } else {
+    placedRisk = modelRisk;
+    if (validOdds) {
+      placedToWin = placedRisk * stakeToWinMult;
+    } else {
+      placedToWin = 0;
+      noteParts.push("invalid_odds_risk_fallback_zero_to_win");
+    }
+  }
+
+  var needsStakeMin = (minAppliesTo === "STAKE" || minAppliesTo === "STAKE_OR_TO_WIN");
+  var needsToWinMin = (minAppliesTo === "TO_WIN" || minAppliesTo === "STAKE_OR_TO_WIN");
+  var appliedOnStake = false;
+  var appliedOnToWin = false;
+
+  if (needsStakeMin && placedRisk < minMxn) {
+    placedRisk = minMxn;
+    minApplied = true;
+    appliedOnStake = true;
+  }
+  if (needsToWinMin && placedToWin < minMxn) {
+    placedToWin = minMxn;
+    minApplied = true;
+    appliedOnToWin = true;
+  }
+
+  if (validOdds) {
+    if (appliedOnStake && !appliedOnToWin) placedToWin = placedRisk * stakeToWinMult;
+    if (appliedOnToWin && !appliedOnStake) placedRisk = placedToWin / stakeToWinMult;
+    if (appliedOnStake && appliedOnToWin) {
+      var riskFromToWinMin = placedToWin / stakeToWinMult;
+      if (riskFromToWinMin > placedRisk) placedRisk = riskFromToWinMin;
+      placedToWin = placedRisk * stakeToWinMult;
+    }
+  }
+
+  placedRisk = roundBetAmountToIncrement_(placedRisk, roundTo);
+  placedToWin = roundBetAmountToIncrement_(placedToWin, roundTo);
+
+  if (needsStakeMin && placedRisk < minMxn) {
+    placedRisk = roundBetAmountUpToMin_(minMxn, roundTo);
+    if (validOdds) placedToWin = roundBetAmountToIncrement_(placedRisk * stakeToWinMult, roundTo);
+  }
+  if (needsToWinMin && placedToWin < minMxn) {
+    placedToWin = roundBetAmountUpToMin_(minMxn, roundTo);
+    if (validOdds) placedRisk = roundBetAmountToIncrement_(placedToWin / stakeToWinMult, roundTo);
+  }
+
+  if (minApplied) {
+    if (appliedOnStake && !appliedOnToWin) noteParts.push("min_bet_applied_risk_upscaled");
+    else if (appliedOnToWin && !appliedOnStake) noteParts.push("min_bet_applied_to_win_upscaled");
+    else noteParts.push("min_bet_applied_stake_or_to_win_upscaled");
+  }
+  if (roundTo > 1) noteParts.push("rounded_to_increment_" + roundTo);
+
+  var effectiveUnits = (unitMxn > 0) ? (placedRisk / unitMxn) : 0;
+  return {
+    unit_mxn: round_(unitMxn, 2),
+    model_risk_mxn: round_(modelRisk, 2),
+    model_to_win_mxn: round_(modelToWin, 2),
+    placed_risk_mxn: round_(placedRisk, 2),
+    placed_to_win_mxn: round_(placedToWin, 2),
+    min_applied: !!minApplied,
+    sizing_mode: mode,
+    min_applies_to: minAppliesTo,
+    effective_units: round_(effectiveUnits, 4),
+    sizing_note: noteParts.join("|")
+  };
+}
+
+function roundBetAmountToIncrement_(amountMxn, roundToMxn) {
+  var amt = Math.max(0, Number(amountMxn) || 0);
+  var inc = Math.max(1, Math.floor(Number(roundToMxn) || 1));
+  return Math.round(amt / inc) * inc;
+}
+
+function roundBetAmountUpToMin_(minMxn, roundToMxn) {
+  var minAmt = Math.max(0, Number(minMxn) || 0);
+  var inc = Math.max(1, Math.floor(Number(roundToMxn) || 1));
+  return Math.ceil(minAmt / inc) * inc;
+}
+
 
 
 function normalizeOddsHistorySnapshot_(input, rowIndex) {
