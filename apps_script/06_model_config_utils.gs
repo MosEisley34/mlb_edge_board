@@ -1321,6 +1321,7 @@ function maybeNotifyDiscord_(cfg, oddsId, dateKey, payload) {
   var noVig = (payload.bet.side === "AWAY") ? payload.awayNoVig : payload.homeNoVig;
   var modelP = (payload.bet.side === "AWAY") ? payload.pAway : payload.pHome;
   var edge = Number(payload.bet.edge);
+  var sizingPlan = buildBetSizingPlan_(payload.units, price, cfg);
   var nowMs = new Date().getTime();
   var isSameDaySignal = (String(prevState.dateKey || "") === String(dateKey || ""));
 
@@ -1403,7 +1404,12 @@ function maybeNotifyDiscord_(cfg, oddsId, dateKey, payload) {
     "**" + payload.awayTeam + " @ " + payload.homeTeam + "**\n" +
     "🕒 " + payload.commenceLocal + "\n\n" +
     "🎯 **Bet:** " + payload.bet.side + " (" + pickTeam + ") @ **" + price + "**\n" +
-    "💰 **Units:** " + Number(payload.units).toFixed(2) + "\n\n" +
+    "💰 **Units:** " + Number(payload.units).toFixed(2) + "\n" +
+    "💵 Stake (MXN): " + Number(sizingPlan.placed_risk_mxn || 0).toFixed(2) + "\n" +
+    "🏁 To Win (MXN): " + Number(sizingPlan.placed_to_win_mxn || 0).toFixed(2) + "\n" +
+    "📏 1u = " + Number(sizingPlan.unit_mxn || 0).toFixed(2) + " MXN\n" +
+    (sizingPlan.min_applied ? "⚠️ Min bet rule applied\n" : "") +
+    "Mode: " + (String(sizingPlan.sizing_mode || "RISK") === "TO_WIN" ? "To Win" : "Risk") + "\n\n" +
     "📊 **Model:** " + (modelP * 100).toFixed(1) + "% | **Implied:** " + (implied * 100).toFixed(1) + "%" +
     (isFinite(noVig) ? " | **No-vig:** " + (noVig * 100).toFixed(1) + "%" : "") + "\n" +
     "📈 **Edge:** " + (payload.bet.edge * 100).toFixed(2) + "% | **Confidence:** " + Math.round(payload.conf) + "/100\n" +
@@ -1412,13 +1418,20 @@ function maybeNotifyDiscord_(cfg, oddsId, dateKey, payload) {
 
   var isUpdate = isSameDaySignal && !!prevState.lastSignalId;
   if (isUpdate) {
+    var prevUnitsForSizing = isFinite(prevState.lastUnits) ? prevState.lastUnits : Number(payload.units);
+    var prevSizing = buildBetSizingPlan_(prevUnitsForSizing, prevState.lastPrice, cfg);
+    var prevStakeTxt = isFinite(prevState.lastStakeMxn) ? Number(prevState.lastStakeMxn).toFixed(2) : (isFinite(prevSizing.placed_risk_mxn) ? Number(prevSizing.placed_risk_mxn).toFixed(2) : "?");
+    var prevToWinTxt = isFinite(prevState.lastToWinMxn) ? Number(prevState.lastToWinMxn).toFixed(2) : (isFinite(prevSizing.placed_to_win_mxn) ? Number(prevSizing.placed_to_win_mxn).toFixed(2) : "?");
+    var prevMinApplied = prevState.lastMinApplied ? "Y" : "N";
+    var newMinApplied = sizingPlan.min_applied ? "Y" : "N";
     msg =
       "🔁 SIGNAL UPDATE\n" +
       "Prior SignalId: `" + prevState.lastSignalId + "` → New SignalId: `" + signalId + "`\n" +
       "Reason: `" + reason + "`\n" +
       "Tier: **" + (prevState.lastTier || "?") + "** → **" + String(payload.bet.tier || "") + "**\n" +
       "Odds: **" + (isFinite(prevState.lastPrice) ? prevState.lastPrice : "?") + "** → **" + (isFinite(price) ? price : "?") + "**\n" +
-      "Edge: **" + (isFinite(prevState.lastEdge) ? (prevState.lastEdge * 100).toFixed(2) + "%" : "?") + "** → **" + (isFinite(edge) ? (edge * 100).toFixed(2) + "%" : "?") + "**\n\n" +
+      "Edge: **" + (isFinite(prevState.lastEdge) ? (prevState.lastEdge * 100).toFixed(2) + "%" : "?") + "** → **" + (isFinite(edge) ? (edge * 100).toFixed(2) + "%" : "?") + "**\n" +
+      "Stake (MXN): **" + prevStakeTxt + "** → **" + Number(sizingPlan.placed_risk_mxn || 0).toFixed(2) + "** | To Win: **" + prevToWinTxt + "** → **" + Number(sizingPlan.placed_to_win_mxn || 0).toFixed(2) + "** | Min rule: **" + prevMinApplied + "** → **" + newMinApplied + "**\n\n" +
       msg;
   }
 
@@ -1450,6 +1463,12 @@ function maybeNotifyDiscord_(cfg, oddsId, dateKey, payload) {
       lastSentMs: nowMs,
       lastPrice: isFinite(price) ? round_(price, 4) : "",
       lastEdge: isFinite(edge) ? round_(edge, 6) : "",
+      lastUnits: isFinite(payload.units) ? round_(payload.units, 4) : "",
+      lastStakeMxn: isFinite(sizingPlan.placed_risk_mxn) ? round_(sizingPlan.placed_risk_mxn, 2) : "",
+      lastToWinMxn: isFinite(sizingPlan.placed_to_win_mxn) ? round_(sizingPlan.placed_to_win_mxn, 2) : "",
+      lastMinApplied: !!sizingPlan.min_applied,
+      lastSizingMode: String(sizingPlan.sizing_mode || ""),
+      lastUnitMxn: isFinite(sizingPlan.unit_mxn) ? round_(sizingPlan.unit_mxn, 2) : "",
       lastTier: String(payload.bet.tier || ""),
       lastSignalId: String(signalId || ""),
       lastDiscordMessageId: String(messageId || "")
@@ -1599,6 +1618,12 @@ function parseNotifyState_(raw) {
     lastSentMs: NaN,
     lastPrice: NaN,
     lastEdge: NaN,
+    lastUnits: NaN,
+    lastStakeMxn: NaN,
+    lastToWinMxn: NaN,
+    lastMinApplied: false,
+    lastSizingMode: "",
+    lastUnitMxn: NaN,
     lastTier: "",
     lastSignalId: "",
     lastDiscordMessageId: ""
@@ -1622,6 +1647,12 @@ function parseNotifyState_(raw) {
     }
     out.lastPrice = toFloat_(obj.lastPrice, NaN);
     out.lastEdge = toFloat_(obj.lastEdge, NaN);
+    out.lastUnits = toFloat_(obj.lastUnits, NaN);
+    out.lastStakeMxn = toFloat_(obj.lastStakeMxn, NaN);
+    out.lastToWinMxn = toFloat_(obj.lastToWinMxn, NaN);
+    out.lastMinApplied = String(obj.lastMinApplied || "").toLowerCase() === "true" || obj.lastMinApplied === true;
+    out.lastSizingMode = String(obj.lastSizingMode || "");
+    out.lastUnitMxn = toFloat_(obj.lastUnitMxn, NaN);
     out.lastTier = String(obj.lastTier || "");
     out.lastSignalId = String(obj.lastSignalId || obj.lastBetId || "");
     out.lastDiscordMessageId = String(obj.lastDiscordMessageId || "");
