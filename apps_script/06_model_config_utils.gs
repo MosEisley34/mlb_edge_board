@@ -753,113 +753,84 @@ function computeUnits_(unitsCfg, tier, confidence) {
 
 function buildBetSizingPlan_(units, decimalOdds, cfg) {
   var unitMxn = Math.max(0, toFloat_(cfg.BANKROLL_UNIT_MXN, 100));
-  var mode = String(cfg.BET_SIZING_MODE || "RISK").toUpperCase();
-  if (mode !== "RISK" && mode !== "TO_WIN") mode = "RISK";
+  var mode = String(cfg.BET_SIZING_MODE || "STAKE").toUpperCase();
+  if (mode === "RISK") mode = "STAKE";
+  if (mode !== "STAKE" && mode !== "TO_WIN") mode = "STAKE";
 
+  var bucketMxn = Math.max(1, toFloat_(cfg.BET_BUCKET_MXN, 20));
+  var bucketRounding = String(cfg.BET_BUCKET_ROUNDING || "CEIL").toUpperCase();
+  if (bucketRounding !== "CEIL" && bucketRounding !== "NEAREST" && bucketRounding !== "FLOOR") bucketRounding = "CEIL";
   var minMxn = Math.max(0, toFloat_(cfg.BET_MIN_MXN, 20));
   var minAppliesTo = String(cfg.BET_MIN_APPLIES_TO || "STAKE_OR_TO_WIN").toUpperCase();
   if (minAppliesTo === "EITHER") minAppliesTo = "STAKE_OR_TO_WIN";
   if (minAppliesTo !== "STAKE" && minAppliesTo !== "TO_WIN" && minAppliesTo !== "STAKE_OR_TO_WIN") minAppliesTo = "STAKE_OR_TO_WIN";
 
-  var roundTo = Math.max(1, Math.floor(toFloat_(cfg.BET_ROUND_TO_MXN, 1)));
+  var unitStep = (unitMxn > 0) ? (bucketMxn / unitMxn) : 0;
   var stakeToWinMult = Number(decimalOdds) - 1;
   var validOdds = isFinite(stakeToWinMult) && stakeToWinMult > 0;
+  var rawStake = Math.max(0, Number(units) * unitMxn);
+  var rawToWin = validOdds ? (rawStake * stakeToWinMult) : 0;
+  if (mode === "TO_WIN") {
+    rawToWin = Math.max(0, Number(units) * unitMxn);
+    rawStake = validOdds ? (rawToWin / stakeToWinMult) : rawToWin;
+  }
 
-  var modelRisk = Math.max(0, Number(units) * unitMxn);
-  var modelToWin = validOdds ? (modelRisk * stakeToWinMult) : 0;
-  var placedRisk = modelRisk;
-  var placedToWin = modelToWin;
+  var recStake = applyBucketRounding_(rawStake, bucketMxn, bucketRounding);
+  var recToWin = applyBucketRounding_(rawToWin, bucketMxn, bucketRounding);
+  var bucketApplied = Math.abs(recStake - rawStake) > 1e-9 || Math.abs(recToWin - rawToWin) > 1e-9;
   var noteParts = [];
   var minApplied = false;
-
-  if (mode === "TO_WIN") {
-    placedToWin = Math.max(0, Number(units) * unitMxn);
-    if (validOdds) {
-      placedRisk = placedToWin / stakeToWinMult;
-    } else {
-      placedRisk = placedToWin;
-      noteParts.push("invalid_odds_to_win_fallback_risk_equals_to_win");
-    }
-  } else {
-    placedRisk = modelRisk;
-    if (validOdds) {
-      placedToWin = placedRisk * stakeToWinMult;
-    } else {
-      placedToWin = 0;
-      noteParts.push("invalid_odds_risk_fallback_zero_to_win");
-    }
-  }
+  if (!validOdds) noteParts.push("invalid_odds_cross_amounts_limited");
 
   var needsStakeMin = (minAppliesTo === "STAKE" || minAppliesTo === "STAKE_OR_TO_WIN");
   var needsToWinMin = (minAppliesTo === "TO_WIN" || minAppliesTo === "STAKE_OR_TO_WIN");
-  var appliedOnStake = false;
-  var appliedOnToWin = false;
-
-  if (needsStakeMin && placedRisk < minMxn) {
-    placedRisk = minMxn;
+  if (needsStakeMin && recStake < minMxn) {
+    recStake = applyBucketRounding_(minMxn, bucketMxn, "CEIL");
     minApplied = true;
-    appliedOnStake = true;
   }
-  if (needsToWinMin && placedToWin < minMxn) {
-    placedToWin = minMxn;
+  if (needsToWinMin && recToWin < minMxn) {
+    recToWin = applyBucketRounding_(minMxn, bucketMxn, "CEIL");
     minApplied = true;
-    appliedOnToWin = true;
-  }
-
-  if (validOdds) {
-    if (appliedOnStake && !appliedOnToWin) placedToWin = placedRisk * stakeToWinMult;
-    if (appliedOnToWin && !appliedOnStake) placedRisk = placedToWin / stakeToWinMult;
-    if (appliedOnStake && appliedOnToWin) {
-      var riskFromToWinMin = placedToWin / stakeToWinMult;
-      if (riskFromToWinMin > placedRisk) placedRisk = riskFromToWinMin;
-      placedToWin = placedRisk * stakeToWinMult;
-    }
-  }
-
-  placedRisk = roundBetAmountToIncrement_(placedRisk, roundTo);
-  placedToWin = roundBetAmountToIncrement_(placedToWin, roundTo);
-
-  if (needsStakeMin && placedRisk < minMxn) {
-    placedRisk = roundBetAmountUpToMin_(minMxn, roundTo);
-    if (validOdds) placedToWin = roundBetAmountToIncrement_(placedRisk * stakeToWinMult, roundTo);
-  }
-  if (needsToWinMin && placedToWin < minMxn) {
-    placedToWin = roundBetAmountUpToMin_(minMxn, roundTo);
-    if (validOdds) placedRisk = roundBetAmountToIncrement_(placedToWin / stakeToWinMult, roundTo);
   }
 
   if (minApplied) {
-    if (appliedOnStake && !appliedOnToWin) noteParts.push("min_bet_applied_risk_upscaled");
-    else if (appliedOnToWin && !appliedOnStake) noteParts.push("min_bet_applied_to_win_upscaled");
+    if (needsStakeMin && !needsToWinMin) noteParts.push("min_bet_applied_stake_upscaled");
+    else if (needsToWinMin && !needsStakeMin) noteParts.push("min_bet_applied_to_win_upscaled");
     else noteParts.push("min_bet_applied_stake_or_to_win_upscaled");
   }
-  if (roundTo > 1) noteParts.push("rounded_to_increment_" + roundTo);
+  if (bucketApplied) noteParts.push("bucketed_" + bucketMxn + "_mxn_" + bucketRounding.toLowerCase());
 
-  var effectiveUnits = (unitMxn > 0) ? (placedRisk / unitMxn) : 0;
+  var effectiveUnits = (unitMxn > 0) ? (recStake / unitMxn) : 0;
   return {
     unit_mxn: round_(unitMxn, 2),
-    model_risk_mxn: round_(modelRisk, 2),
-    model_to_win_mxn: round_(modelToWin, 2),
-    placed_risk_mxn: round_(placedRisk, 2),
-    placed_to_win_mxn: round_(placedToWin, 2),
+    unit_step: round_(unitStep, 4),
+    raw_stake_mxn: round_(rawStake, 2),
+    raw_to_win_mxn: round_(rawToWin, 2),
+    rec_stake_mxn: round_(recStake, 2),
+    rec_to_win_mxn: round_(recToWin, 2),
+    model_risk_mxn: round_(rawStake, 2),
+    model_to_win_mxn: round_(rawToWin, 2),
+    placed_risk_mxn: round_(recStake, 2),
+    placed_to_win_mxn: round_(recToWin, 2),
+    bucket_applied: bucketApplied,
     min_applied: !!minApplied,
     sizing_mode: mode,
     min_applies_to: minAppliesTo,
+    bet_bucket_mxn: round_(bucketMxn, 2),
+    bet_bucket_rounding: bucketRounding,
     effective_units: round_(effectiveUnits, 4),
+    policy_note: noteParts.join("|"),
     sizing_note: noteParts.join("|")
   };
 }
 
-function roundBetAmountToIncrement_(amountMxn, roundToMxn) {
+function applyBucketRounding_(amountMxn, bucketMxn, policy) {
   var amt = Math.max(0, Number(amountMxn) || 0);
-  var inc = Math.max(1, Math.floor(Number(roundToMxn) || 1));
-  return Math.round(amt / inc) * inc;
-}
-
-function roundBetAmountUpToMin_(minMxn, roundToMxn) {
-  var minAmt = Math.max(0, Number(minMxn) || 0);
-  var inc = Math.max(1, Math.floor(Number(roundToMxn) || 1));
-  return Math.ceil(minAmt / inc) * inc;
+  var bucket = Math.max(1, Number(bucketMxn) || 1);
+  var p = String(policy || "CEIL").toUpperCase();
+  if (p === "FLOOR") return Math.floor(amt / bucket) * bucket;
+  if (p === "NEAREST") return Math.round(amt / bucket) * bucket;
+  return Math.ceil(amt / bucket) * bucket;
 }
 
 
@@ -1419,7 +1390,7 @@ function maybeNotifyDiscord_(cfg, oddsId, dateKey, payload) {
     "🏁 To Win (MXN): " + Number(sizingPlan.placed_to_win_mxn || 0).toFixed(2) + "\n" +
     "📏 1u = " + Number(sizingPlan.unit_mxn || 0).toFixed(2) + " MXN\n" +
     (sizingPlan.min_applied ? "⚠️ Min bet rule applied\n" : "") +
-    "Mode: " + (String(sizingPlan.sizing_mode || "RISK") === "TO_WIN" ? "To Win" : "Risk") + "\n\n" +
+    "Mode: " + (String(sizingPlan.sizing_mode || "STAKE") === "TO_WIN" ? "To Win" : "Stake") + "\n\n" +
     "📊 **Model:** " + (modelP * 100).toFixed(1) + "% | **Implied:** " + (implied * 100).toFixed(1) + "%" +
     (isFinite(noVig) ? " | **No-vig:** " + (noVig * 100).toFixed(1) + "%" : "") + "\n" +
     "📈 **Edge:** " + (payload.bet.edge * 100).toFixed(2) + "% | **Confidence:** " + Math.round(payload.conf) + "/100\n" +
