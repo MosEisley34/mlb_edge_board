@@ -833,6 +833,29 @@ function applyBucketRounding_(amountMxn, bucketMxn, policy) {
   return Math.ceil(amt / bucket) * bucket;
 }
 
+function sizingCompactBlockLines_(sizingPlan) {
+  var lines = [];
+  lines.push("📏 1u = " + Number(sizingPlan.unit_mxn || 0).toFixed(2) + " MXN");
+  lines.push("🧮 Raw stake/to-win: " + Number(sizingPlan.raw_stake_mxn || 0).toFixed(2) + " / " + Number(sizingPlan.raw_to_win_mxn || 0).toFixed(2) + " MXN");
+  lines.push("✅ **Recommended stake/to-win: " + Number(sizingPlan.rec_stake_mxn || 0).toFixed(2) + " / " + Number(sizingPlan.rec_to_win_mxn || 0).toFixed(2) + " MXN**");
+  lines.push("🪣 Bucket: " + Number(sizingPlan.bet_bucket_mxn || 0).toFixed(2) + " MXN");
+  if (sizingPlan.min_applied || sizingPlan.bucket_applied) {
+    var warnParts = [];
+    if (sizingPlan.min_applied) warnParts.push("min rule");
+    if (sizingPlan.bucket_applied) warnParts.push("bucket rounding");
+    lines.push("⚠️ Sizing adjusted by " + warnParts.join(" + ") + ".");
+  }
+  return lines;
+}
+
+function hasMaterialSizingChange_(prevStake, prevToWin, nextStake, nextToWin, bucketMxn, prevMinApplied, nextMinApplied) {
+  var bucket = Math.max(1, Number(bucketMxn) || 1);
+  var stakeMove = Math.abs(Number(nextStake || 0) - Number(prevStake || 0));
+  var toWinMove = Math.abs(Number(nextToWin || 0) - Number(prevToWin || 0));
+  if (stakeMove >= bucket || toWinMove >= bucket) return true;
+  return !!prevMinApplied !== !!nextMinApplied;
+}
+
 
 
 function normalizeOddsHistorySnapshot_(input, rowIndex) {
@@ -1386,10 +1409,8 @@ function maybeNotifyDiscord_(cfg, oddsId, dateKey, payload) {
     "🕒 " + payload.commenceLocal + "\n\n" +
     "🎯 **Bet:** " + payload.bet.side + " (" + pickTeam + ") @ **" + price + "**\n" +
     "💰 **Units:** " + Number(payload.units).toFixed(2) + "\n" +
-    "💵 Stake (MXN): " + Number(sizingPlan.placed_risk_mxn || 0).toFixed(2) + "\n" +
-    "🏁 To Win (MXN): " + Number(sizingPlan.placed_to_win_mxn || 0).toFixed(2) + "\n" +
-    "📏 1u = " + Number(sizingPlan.unit_mxn || 0).toFixed(2) + " MXN\n" +
-    (sizingPlan.min_applied ? "⚠️ Min bet rule applied\n" : "") +
+    "💵 **Place now:** Stake " + Number(sizingPlan.placed_risk_mxn || 0).toFixed(2) + " MXN | To Win " + Number(sizingPlan.placed_to_win_mxn || 0).toFixed(2) + " MXN\n" +
+    sizingCompactBlockLines_(sizingPlan).join("\n") + "\n" +
     "Mode: " + (String(sizingPlan.sizing_mode || "STAKE") === "TO_WIN" ? "To Win" : "Stake") + "\n\n" +
     "📊 **Model:** " + (modelP * 100).toFixed(1) + "% | **Implied:** " + (implied * 100).toFixed(1) + "%" +
     (isFinite(noVig) ? " | **No-vig:** " + (noVig * 100).toFixed(1) + "%" : "") + "\n" +
@@ -1405,6 +1426,22 @@ function maybeNotifyDiscord_(cfg, oddsId, dateKey, payload) {
     var prevToWinTxt = isFinite(prevState.lastToWinMxn) ? Number(prevState.lastToWinMxn).toFixed(2) : (isFinite(prevSizing.placed_to_win_mxn) ? Number(prevSizing.placed_to_win_mxn).toFixed(2) : "?");
     var prevMinApplied = prevState.lastMinApplied ? "Y" : "N";
     var newMinApplied = sizingPlan.min_applied ? "Y" : "N";
+    var sizingChangedMaterially = hasMaterialSizingChange_(
+      prevSizing.placed_risk_mxn,
+      prevSizing.placed_to_win_mxn,
+      sizingPlan.placed_risk_mxn,
+      sizingPlan.placed_to_win_mxn,
+      sizingPlan.bet_bucket_mxn,
+      prevState.lastMinApplied,
+      sizingPlan.min_applied
+    );
+    var sizingUpdateLine =
+      "💵 Placement: **" + prevStakeTxt + " / " + prevToWinTxt + " MXN** → **" +
+      Number(sizingPlan.placed_risk_mxn || 0).toFixed(2) + " / " + Number(sizingPlan.placed_to_win_mxn || 0).toFixed(2) +
+      " MXN** | Min rule: **" + prevMinApplied + "** → **" + newMinApplied + "**\n";
+    if (sizingChangedMaterially) {
+      sizingUpdateLine += "📦 Sizing block updated:\n" + sizingCompactBlockLines_(sizingPlan).join("\n") + "\n";
+    }
     msg =
       "🔁 SIGNAL UPDATE\n" +
       "Prior SignalId: `" + prevState.lastSignalId + "` → New SignalId: `" + signalId + "`\n" +
@@ -1412,7 +1449,7 @@ function maybeNotifyDiscord_(cfg, oddsId, dateKey, payload) {
       "Tier: **" + (prevState.lastTier || "?") + "** → **" + String(payload.bet.tier || "") + "**\n" +
       "Odds: **" + (isFinite(prevState.lastPrice) ? prevState.lastPrice : "?") + "** → **" + (isFinite(price) ? price : "?") + "**\n" +
       "Edge: **" + (isFinite(prevState.lastEdge) ? (prevState.lastEdge * 100).toFixed(2) + "%" : "?") + "** → **" + (isFinite(edge) ? (edge * 100).toFixed(2) + "%" : "?") + "**\n" +
-      "Stake (MXN): **" + prevStakeTxt + "** → **" + Number(sizingPlan.placed_risk_mxn || 0).toFixed(2) + "** | To Win: **" + prevToWinTxt + "** → **" + Number(sizingPlan.placed_to_win_mxn || 0).toFixed(2) + "** | Min rule: **" + prevMinApplied + "** → **" + newMinApplied + "**\n\n" +
+      sizingUpdateLine + "\n" +
       msg;
   }
 
