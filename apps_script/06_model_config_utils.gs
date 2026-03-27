@@ -652,6 +652,15 @@ function implied_(decOdds, fallbackImp) {
   return isFinite(f) ? f : NaN;
 }
 
+function decimalToAmericanOddsText_(decimalOdds) {
+  var dec = Number(decimalOdds);
+  if (!isFinite(dec) || dec <= 1) return String(decimalOdds);
+  var american = dec >= 2 ? ((dec - 1) * 100) : (-100 / (dec - 1));
+  if (!isFinite(american)) return String(decimalOdds);
+  var rounded = Math.round(american);
+  return (rounded > 0 ? "+" : "") + String(rounded);
+}
+
 function clamp_(lo, hi, x) { return Math.max(lo, Math.min(hi, x)); }
 
 function confidence_(mode, awayHitMatched, homeHitMatched, awayPitMatched, homePitMatched, lineupFallbackUsed) {
@@ -1312,6 +1321,7 @@ function maybeNotifyDiscord_(cfg, oddsId, dateKey, payload) {
 
   var pickTeam = (payload.bet.side === "AWAY") ? payload.awayTeam : payload.homeTeam;
   var price = Number((payload.bet.side === "AWAY") ? payload.awayOdds : payload.homeOdds);
+  var americanPrice = decimalToAmericanOddsText_(price);
   var implied = (payload.bet.side === "AWAY") ? payload.awayImp : payload.homeImp;
   var noVig = (payload.bet.side === "AWAY") ? payload.awayNoVig : payload.homeNoVig;
   var modelP = (payload.bet.side === "AWAY") ? payload.pAway : payload.pHome;
@@ -1414,7 +1424,7 @@ function maybeNotifyDiscord_(cfg, oddsId, dateKey, payload) {
     "📈 **" + payload.mode + " MODEL SIGNAL — " + payload.bet.tier + "**\n" +
     "**" + payload.awayTeam + " @ " + payload.homeTeam + "**\n" +
     "🕒 " + payload.commenceLocal + "\n\n" +
-    "🎯 **Bet:** " + payload.bet.side + " (" + pickTeam + ") @ **" + price + "**\n" +
+    "🎯 **Bet:** " + payload.bet.side + " (" + pickTeam + ") @ **" + price + "** (American: **" + americanPrice + "**)\n" +
     "💰 **Units:** " + Number(payload.units).toFixed(2) + "\n" +
     "💵 **Place now:** Stake " + Number(sizingPlan.placed_risk_mxn || 0).toFixed(2) + " MXN | To Win " + Number(sizingPlan.placed_to_win_mxn || 0).toFixed(2) + " MXN\n" +
     sizingCompactBlockLines_(sizingPlan).join("\n") + "\n" +
@@ -1431,6 +1441,10 @@ function maybeNotifyDiscord_(cfg, oddsId, dateKey, payload) {
     var prevSizing = buildBetSizingPlan_(prevUnitsForSizing, prevState.lastPrice, cfg);
     var prevStakeTxt = isFinite(prevState.lastStakeMxn) ? Number(prevState.lastStakeMxn).toFixed(2) : (isFinite(prevSizing.placed_risk_mxn) ? Number(prevSizing.placed_risk_mxn).toFixed(2) : "?");
     var prevToWinTxt = isFinite(prevState.lastToWinMxn) ? Number(prevState.lastToWinMxn).toFixed(2) : (isFinite(prevSizing.placed_to_win_mxn) ? Number(prevSizing.placed_to_win_mxn).toFixed(2) : "?");
+    var prevPriceTxt = isFinite(prevState.lastPrice) ? prevState.lastPrice : "?";
+    var currPriceTxt = isFinite(price) ? price : "?";
+    var prevPriceAmericanTxt = isFinite(prevState.lastPrice) ? decimalToAmericanOddsText_(prevState.lastPrice) : "?";
+    var currPriceAmericanTxt = isFinite(price) ? decimalToAmericanOddsText_(price) : "?";
     var prevMinApplied = prevState.lastMinApplied ? "Y" : "N";
     var newMinApplied = sizingPlan.min_applied ? "Y" : "N";
     var sizingChangedMaterially = hasMaterialSizingChange_(
@@ -1454,7 +1468,7 @@ function maybeNotifyDiscord_(cfg, oddsId, dateKey, payload) {
       "Prior SignalId: `" + prevState.lastSignalId + "` → New SignalId: `" + signalId + "`\n" +
       "Reason: `" + reason + "`\n" +
       "Tier: **" + (prevState.lastTier || "?") + "** → **" + String(payload.bet.tier || "") + "**\n" +
-      "Odds: **" + (isFinite(prevState.lastPrice) ? prevState.lastPrice : "?") + "** → **" + (isFinite(price) ? price : "?") + "**\n" +
+      "Odds: **" + prevPriceTxt + "** (American: **" + prevPriceAmericanTxt + "**) → **" + currPriceTxt + "** (American: **" + currPriceAmericanTxt + "**)\n" +
       "Edge: **" + (isFinite(prevState.lastEdge) ? (prevState.lastEdge * 100).toFixed(2) + "%" : "?") + "** → **" + (isFinite(edge) ? (edge * 100).toFixed(2) + "%" : "?") + "**\n" +
       sizingUpdateLine + "\n" +
       msg;
