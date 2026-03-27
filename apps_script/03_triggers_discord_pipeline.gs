@@ -298,6 +298,7 @@ function pipelineTriggerStateSnapshot_(allTriggers, targetMins) {
 /* ===================== DISCORD ===================== */
 
 var DISCORD_MESSAGE_DIVIDER = "────────────────────────";
+var DISCORD_CONTENT_LIMIT = 2000;
 
 function getDiscordWebhook_(cfg) {
   return (cfg && cfg.DISCORD_WEBHOOK ? cfg.DISCORD_WEBHOOK : "") ||
@@ -792,6 +793,8 @@ function sendDiscordHeartbeat() {
   var lastStatus = props.getProperty(PROP.LAST_PIPELINE_STATUS) || "";
   var lastSummary = props.getProperty(PROP.LAST_PIPELINE_SUMMARY) || "";
   var lastCalibrationSummary = props.getProperty(PROP.LAST_CALIBRATION_SUMMARY) || "";
+  var scheduleSnapshot = fetchTodayMlbScheduleForHeartbeat_();
+  var scheduleBlocks = buildHeartbeatScheduleBlocks_(scheduleSnapshot);
 
   var msg =
     "🫀 **Lucky Luciano MLB — Heartbeat (" + mode + ")**\n" +
@@ -804,15 +807,198 @@ function sendDiscordHeartbeat() {
   if (lastSummary) msg += "**Last summary:** " + lastSummary + "\n";
   if (lastCalibrationSummary) msg += "**Calibration:** " + lastCalibrationSummary + "\n";
   msg += DISCORD_MESSAGE_DIVIDER + "\n";
-  msg += "_If you see this, triggers + Discord delivery are working._";
+  msg += "_If you see this, triggers + Discord delivery are working._\n";
+  msg += DISCORD_MESSAGE_DIVIDER + "\n";
 
-  var res = sendDiscordByMode_(deliveryMode, { content: msg });
-  if (res.http >= 200 && res.http < 300) {
-    props.setProperty(PROP.LAST_HEARTBEAT_KEY, key);
-    log_("INFO", "Heartbeat sent", { http: res.http, mode: mode, key: key, deliveryMode: res.deliveryMode, body: String(res.body || "").slice(0, 200) });
-  } else {
-    log_("WARN", "Heartbeat failed", { http: res.http, body: String(res.body || "").slice(0, 200), deliveryMode: res.deliveryMode });
+  var firstContent = appendScheduleBlockWithinLimit_(msg, scheduleBlocks.firstBlock, scheduleBlocks.remainingCount);
+  var messages = [firstContent];
+  var continuation = scheduleBlocks.continuationBlocks || [];
+  for (var i = 0; i < continuation.length; i++) messages.push(continuation[i]);
+
+  var firstRes = sendDiscordByMode_(deliveryMode, { content: messages[0] });
+  var allSent = firstRes.http >= 200 && firstRes.http < 300;
+  if (allSent) {
+    for (var m = 1; m < messages.length; m++) {
+      var extraRes = sendDiscordByMode_(deliveryMode, { content: messages[m] });
+      if (!(extraRes.http >= 200 && extraRes.http < 300)) {
+        allSent = false;
+        log_("WARN", "Heartbeat schedule continuation failed", {
+          http: extraRes.http,
+          body: String(extraRes.body || "").slice(0, 200),
+          deliveryMode: extraRes.deliveryMode,
+          chunkIndex: m,
+          totalChunks: messages.length
+        });
+        break;
+      }
+    }
   }
+
+  if (firstRes.http >= 200 && firstRes.http < 300) {
+    props.setProperty(PROP.LAST_HEARTBEAT_KEY, key);
+    log_(allSent ? "INFO" : "WARN", "Heartbeat sent", {
+      http: firstRes.http,
+      mode: mode,
+      key: key,
+      deliveryMode: firstRes.deliveryMode,
+      scheduleGames: scheduleSnapshot.totalGames,
+      scheduleChunks: messages.length,
+      scheduleFetchError: scheduleSnapshot.error || "",
+      body: String(firstRes.body || "").slice(0, 200)
+    });
+  } else {
+    log_("WARN", "Heartbeat failed", {
+      http: firstRes.http,
+      body: String(firstRes.body || "").slice(0, 200),
+      deliveryMode: firstRes.deliveryMode,
+      scheduleGames: scheduleSnapshot.totalGames,
+      scheduleFetchError: scheduleSnapshot.error || ""
+    });
+  }
+}
+
+function fetchTodayMlbScheduleForHeartbeat_() {
+  var todayLocal = Utilities.formatDate(new Date(), TZ, "yyyy-MM-dd");
+  var url =
+    "https://statsapi.mlb.com/api/v1/schedule?sportId=1&startDate=" + encodeURIComponent(todayLocal) +
+    "&endDate=" + encodeURIComponent(todayLocal);
+  var snapshot = { games: [], totalGames: 0, dateLocal: todayLocal, error: "" };
+  try {
+    var resp = UrlFetchApp.fetch(url, { muteHttpExceptions: true, headers: { "User-Agent": "mlb-edge-board/1.0" } });
+    var http = resp.getResponseCode();
+    if (http !== 200) {
+      snapshot.error = "http_" + http;
+      return snapshot;
+    }
+    var payload = JSON.parse(resp.getContentText() || "{}");
+    var dates = (payload && payload.dates) ? payload.dates : [];
+    for (var i = 0; i < dates.length; i++) {
+      var list = dates[i] && dates[i].games ? dates[i].games : [];
+      for (var j = 0; j < list.length; j++) {
+        var g = list[j] || {};
+        var gameDateRaw = String(g.gameDate || "");
+        var gameDateMs = Date.parse(gameDateRaw);
+        var awayTeam = String((((g.teams || {}).away || {}).team || {}).name || "").trim();
+        var homeTeam = String((((g.teams || {}).home || {}).team || {}).name || "").trim();
+        if (!awayTeam || !homeTeam) continue;
+        snapshot.games.push({
+          awayTeam: awayTeam,
+          homeTeam: homeTeam,
+          gameDateMs: isFinite(gameDateMs) ? gameDateMs : Number.MAX_SAFE_INTEGER,
+          firstPitchLocal: isFinite(gameDateMs) ? Utilities.formatDate(new Date(gameDateMs), TZ, "h:mm a") + " (" + TZ_OFFSET + ")" : "TBD",
+          status: normalizeHeartbeatGameStatus_(g.status || {})
+        });
+      }
+    }
+    snapshot.games.sort(function(a, b) {
+      if (a.gameDateMs !== b.gameDateMs) return a.gameDateMs - b.gameDateMs;
+      var aAway = String(a.awayTeam || "");
+      var bAway = String(b.awayTeam || "");
+      if (aAway !== bAway) return aAway < bAway ? -1 : 1;
+      var aHome = String(a.homeTeam || "");
+      var bHome = String(b.homeTeam || "");
+      if (aHome !== bHome) return aHome < bHome ? -1 : 1;
+      return 0;
+    });
+    snapshot.totalGames = snapshot.games.length;
+    return snapshot;
+  } catch (err) {
+    snapshot.error = String(err);
+    return snapshot;
+  }
+}
+
+function normalizeHeartbeatGameStatus_(statusObj) {
+  var s = statusObj || {};
+  var abstractState = String(s.abstractGameState || "").toLowerCase();
+  var detailed = String(s.detailedState || "");
+  if (abstractState === "preview") return "Scheduled";
+  if (abstractState === "live") return "In Progress";
+  if (abstractState === "final") return "Final";
+  if (detailed) return detailed;
+  return "";
+}
+
+function buildHeartbeatScheduleBlocks_(scheduleSnapshot) {
+  var games = (scheduleSnapshot && scheduleSnapshot.games) ? scheduleSnapshot.games : [];
+  var totalGames = Math.max(0, toInt_(scheduleSnapshot ? scheduleSnapshot.totalGames : 0, games.length));
+  var headerLine = "📅 Today’s MLB Schedule (" + totalGames + " games)";
+  var gameLines = [];
+  if (games.length === 0) {
+    gameLines.push("No MLB games scheduled today");
+  } else {
+    for (var i = 0; i < games.length; i++) {
+      var g = games[i] || {};
+      var line = String(g.firstPitchLocal || "TBD") + " — " + String(g.awayTeam || "Away") + " @ " + String(g.homeTeam || "Home");
+      if (g.status) line += " (" + g.status + ")";
+      gameLines.push(line);
+    }
+  }
+  var errorLine = (scheduleSnapshot && scheduleSnapshot.error) ? ("⚠️ Schedule fetch issue: " + String(scheduleSnapshot.error)) : "";
+  return splitHeartbeatScheduleLines_(headerLine, gameLines, errorLine);
+}
+
+function splitHeartbeatScheduleLines_(headerLine, gameLines, errorLine) {
+  var safeLimit = DISCORD_CONTENT_LIMIT;
+  var firstBlock = String(headerLine || "");
+  var continuationBlocks = [];
+  var firstGamesIncluded = 0;
+  for (var i = 0; i < gameLines.length; i++) {
+    var candidate = firstBlock + "\n" + gameLines[i];
+    if (candidate.length <= safeLimit) {
+      firstBlock = candidate;
+      firstGamesIncluded++;
+      continue;
+    }
+    break;
+  }
+  var remainingGamesCount = Math.max(0, gameLines.length - firstGamesIncluded);
+  if (remainingGamesCount > 0) {
+    var rest = gameLines.slice(firstGamesIncluded);
+    var chunk = "";
+    for (var r = 0; r < rest.length; r++) {
+      var row = rest[r];
+      var maybe = chunk ? (chunk + "\n" + row) : row;
+      if (maybe.length <= safeLimit) {
+        chunk = maybe;
+      } else {
+        if (chunk) continuationBlocks.push(chunk);
+        if (row.length > safeLimit) continuationBlocks.push(row.slice(0, safeLimit - 18) + "… [truncated]");
+        else chunk = row;
+        if (chunk && chunk.length > safeLimit) chunk = "";
+      }
+    }
+    if (chunk) continuationBlocks.push(chunk);
+  }
+  if (errorLine) {
+    var withError = firstBlock + "\n" + errorLine;
+    if (withError.length <= safeLimit) {
+      firstBlock = withError;
+    } else {
+      continuationBlocks.push(errorLine.length > safeLimit ? errorLine.slice(0, safeLimit - 18) + "… [truncated]" : errorLine);
+    }
+  }
+  return {
+    firstBlock: firstBlock,
+    continuationBlocks: continuationBlocks,
+    remainingCount: remainingGamesCount
+  };
+}
+
+function appendScheduleBlockWithinLimit_(baseContent, scheduleBlock, remainingCount) {
+  var base = String(baseContent || "");
+  var schedule = String(scheduleBlock || "");
+  if (!schedule) return base;
+  var suffix = "";
+  if (remainingCount > 0) suffix = "\n...and " + remainingCount + " more games";
+  var candidate = base + schedule + suffix;
+  if (candidate.length <= DISCORD_CONTENT_LIMIT) return candidate;
+
+  var available = Math.max(0, DISCORD_CONTENT_LIMIT - base.length - suffix.length - 1);
+  var trimmed = schedule.slice(0, available);
+  if (trimmed.lastIndexOf("\n") > 0) trimmed = trimmed.slice(0, trimmed.lastIndexOf("\n"));
+  if (!trimmed) trimmed = "📅 Today’s MLB Schedule";
+  return base + trimmed + suffix;
 }
 
 /* ===================== PIPELINE ===================== */
